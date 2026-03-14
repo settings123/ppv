@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StreamTV</title>
+<style>
+  :root {
+    --bg: #0D0D12;
+    --bg2: #16161F;
+    --bg3: #1F1F2E;
+    --accent: #00D4FF;
+    --text: #F0F0FF;
+    --muted: #55556A;
+    --border: #2A2A3A;
+    --red: #FF6B6B;
+    --green: #00FF88;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Top bar ── */
+  #topbar {
+    align-items: center;
+    background: #13131A;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+    padding: 10px 16px;
+    flex-shrink: 0;
+  }
+
+  #appName {
+    color: var(--accent);
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+  }
+
+  #urlInput {
+    flex: 1;
+    background: #1A1A28;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.95rem;
+    padding: 8px 14px;
+    outline: none;
+  }
+  #urlInput:focus { border-color: var(--accent); }
+
+  .btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #000;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 700;
+    padding: 8px 18px;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.8; }
+  .btn:disabled { opacity: 0.35; cursor: default; }
+  .btn.secondary {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn.scan { background: var(--green); }
+
+  #currentUrl {
+    color: var(--muted);
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+  }
+
+  /* ── Main area ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Browser panel ── */
+  #browserPanel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  #screenshotWrap {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    cursor: crosshair;
+    background: #000;
+  }
+
+  #screenshot {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+
+  #loadingOverlay {
+    align-items: center;
+    background: rgba(0,0,0,0.7);
+    display: none;
+    inset: 0;
+    justify-content: center;
+    position: absolute;
+  }
+  #loadingOverlay.active { display: flex; }
+
+  .spinner {
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #browserControls {
+    background: #13131A;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    align-items: center;
+  }
+
+  #status {
+    color: var(--muted);
+    font-size: 0.8rem;
+    flex: 1;
+  }
+
+  /* ── Results panel ── */
+  #resultsPanel {
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    width: 360px;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  #resultsHeader {
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 12px 16px;
+    text-transform: uppercase;
+  }
+
+  #streamList {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+  }
+
+  #streamList::-webkit-scrollbar { width: 4px; }
+  #streamList::-webkit-scrollbar-track { background: transparent; }
+  #streamList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .stream-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 8px;
+    padding: 12px 14px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .stream-item:hover {
+    background: var(--bg3);
+    border-color: var(--accent);
+  }
+
+  .stream-top {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+
+  .badge {
+    background: #001A22;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--accent);
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  .stream-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stream-url {
+    color: var(--muted);
+    font-family: monospace;
+    font-size: 0.7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #emptyState {
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 20px 16px;
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  /* ── Video player overlay ── */
+  #playerOverlay {
+    background: #000;
+    display: none;
+    inset: 0;
+    position: fixed;
+    z-index: 100;
+    flex-direction: column;
+  }
+  #playerOverlay.active { display: flex; }
+
+  #videoPlayer {
+    flex: 1;
+    width: 100%;
+    background: #000;
+  }
+
+  #playerBar {
+    align-items: center;
+    background: rgba(0,0,0,0.8);
+    display: flex;
+    gap: 12px;
+    padding: 10px 16px;
+  }
+
+  #playerTitle {
+    flex: 1;
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #playerError {
+    color: var(--red);
+    font-size: 0.85rem;
+    padding: 12px 16px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topbar">
+  <span id="appName">STREAMTV</span>
+  <input id="urlInput" type="text" placeholder="Enter URL…" />
+  <button class="btn" id="btnGo">Go</button>
+  <button class="btn secondary" id="btnBack">← Back</button>
+  <button class="btn scan" id="btnScan">⬡ Scan</button>
+  <span id="currentUrl"></span>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Browser screenshot -->
+  <div id="browserPanel">
+    <div id="screenshotWrap">
+      <img id="screenshot" src="" alt="" />
+      <div id="loadingOverlay"><div class="spinner"></div></div>
+    </div>
+    <div id="browserControls">
+      <button class="btn secondary" id="btnScrollUp">↑ Scroll</button>
+      <button class="btn secondary" id="btnScrollDown">↓ Scroll</button>
+      <span id="status">Enter a URL to get started</span>
+    </div>
+  </div>
+
+  <!-- Results panel -->
+  <div id="resultsPanel">
+    <div id="resultsHeader">Stream Links (<span id="streamCount">0</span>)</div>
+    <div id="streamList">
+      <div id="emptyState">Navigate to a page with a video player, then click Scan to find stream links.</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Player overlay -->
+<div id="playerOverlay">
+  <video id="videoPlayer" controls autoplay></video>
+  <div id="playerError"></div>
+  <div id="playerBar">
+    <span id="playerTitle"></span>
+    <button class="btn secondary" id="btnClosePlayer">✕ Close</button>
+  </div>
+</div>
+
+<script>
+  const urlInput    = document.getElementById('urlInput');
+  const btnGo       = document.getElementById('btnGo');
+  const btnBack     = document.getElementById('btnBack');
+  const btnScan     = document.getElementById('btnScan');
+  const btnScrollUp = document.getElementById('btnScrollUp');
+  const btnScrollDown = document.getElementById('btnScrollDown');
+  const screenshot  = document.getElementById('screenshot');
+  const loading     = document.getElementById('loadingOverlay');
+  const status      = document.getElementById('status');
+  const currentUrl  = document.getElementById('currentUrl');
+  const streamList  = document.getElementById('streamList');
+  const streamCount = document.getElementById('streamCount');
+  const emptyState  = document.getElementById('emptyState');
+  const playerOverlay = document.getElementById('playerOverlay');
+  const videoPlayer = document.getElementById('videoPlayer');
+  const playerTitle = document.getElementById('playerTitle');
+  const playerError = document.getElementById('playerError');
+  const btnClosePlayer = document.getElementById('btnClosePlayer');
+  const screenshotWrap = document.getElementById('screenshotWrap');
+
+  function setLoading(on) {
+    loading.classList.toggle('active', on);
+    btnGo.disabled = on;
+    btnScan.disabled = on;
+  }
+
+  function updateView(data) {
+    if (data.screenshot) {
+      screenshot.src = 'data:image/jpeg;base64,' + data.screenshot;
+    }
+    if (data.currentUrl) {
+      currentUrl.textContent = data.currentUrl;
+      urlInput.value = data.currentUrl;
+    }
+  }
+
+  async function post(endpoint, body) {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return r.json();
+  }
+
+  // Navigate
+  async function navigate() {
+    const url = urlInput.value.trim();
+    if (!url) return;
+    setLoading(true);
+    status.textContent = 'Loading…';
+    try {
+      const data = await post('/api/navigate', { url });
+      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+      updateView(data);
+      status.textContent = 'Click anywhere on the page to interact';
+    } catch (e) {
+      status.textContent = 'Failed to load page';
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  btnGo.addEventListener('click', navigate);
+  urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') navigate(); });
+
+  // Back
+  btnBack.addEventListener('click', async () => {
+    setLoading(true);
+    try {
+      const data = await post('/api/back', {});
+      updateView(data);
+    } finally { setLoading(false); }
+  });
+
+  // Scroll
+  btnScrollUp.addEventListener('click', async () => {
+    const data = await post('/api/scroll', { direction: 'up' });
+    updateView(data);
+  });
+  btnScrollDown.addEventListener('click', async () => {
+    const data = await post('/api/scroll', { direction: 'down' });
+    updateView(data);
+  });
+
+  // Click on screenshot
+  screenshotWrap.addEventListener('click', async (e) => {
+    if (loading.classList.contains('active')) return;
+    const rect = screenshotWrap.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setLoading(true);
+    status.textContent = 'Clicking…';
+    try {
+      const data = await post('/api/click', { x, y });
+      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+      updateView(data);
+      status.textContent = 'Click anywhere on the page to interact';
+    } finally { setLoading(false); }
+  });
+
+  // Scan
+  btnScan.addEventListener('click', async () => {
+    setLoading(true);
+    status.textContent = 'Scanning for streams…';
+    try {
+      const data = await fetch('/api/scan').then(r => r.json());
+      renderStreams(data.streams || []);
+      status.textContent = `Found ${(data.streams || []).length} stream(s)`;
+    } catch (e) {
+      status.textContent = 'Scan failed';
+    } finally { setLoading(false); }
+  });
+
+  function renderStreams(streams) {
+    streamCount.textContent = streams.length;
+    if (streams.length === 0) {
+      streamList.innerHTML = '';
+      streamList.appendChild(emptyState);
+      emptyState.textContent = 'No streams found. Try navigating deeper into the site.';
+      return;
+    }
+    streamList.innerHTML = streams.map((s, i) => `
+      <div class="stream-item" data-index="${i}">
+        <div class="stream-top">
+          <span class="badge">${s.type}</span>
+          <span class="stream-label">${escHtml(s.label)}</span>
+        </div>
+        <div class="stream-url">${escHtml(s.url)}</div>
+      </div>
+    `).join('');
+
+    streamList.querySelectorAll('.stream-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const s = streams[parseInt(el.dataset.index)];
+        playStream(s);
+      });
+    });
+  }
+
+  function playStream(stream) {
+    playerTitle.textContent = stream.label;
+    playerError.style.display = 'none';
+    videoPlayer.src = stream.url;
+    playerOverlay.classList.add('active');
+    videoPlayer.play().catch(() => {
+      playerError.style.display = 'block';
+      playerError.textContent = 'Could not play this stream directly. Try copying the URL into VLC or another player.';
+    });
+  }
+
+  btnClosePlayer.addEventListener('click', () => {
+    videoPlayer.pause();
+    videoPlayer.src = '';
+    playerOverlay.classList.remove('active');
+  });
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>
