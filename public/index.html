@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>StreamTV</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.7/hls.min.js"></script>
 <style>
   :root {
     --bg: #0D0D12;
@@ -29,7 +30,6 @@
     flex-direction: column;
   }
 
-  /* ── Top bar ── */
   #topbar {
     align-items: center;
     background: #13131A;
@@ -79,7 +79,7 @@
     border: 1px solid var(--border);
     color: var(--text);
   }
-  .btn.scan { background: var(--green); }
+  .btn.scan { background: var(--green); color: #000; }
 
   #currentUrl {
     color: var(--muted);
@@ -90,14 +90,12 @@
     max-width: 300px;
   }
 
-  /* ── Main area ── */
   #main {
     display: flex;
     flex: 1;
     overflow: hidden;
   }
 
-  /* ── Browser panel ── */
   #browserPanel {
     flex: 1;
     display: flex;
@@ -156,7 +154,6 @@
     flex: 1;
   }
 
-  /* ── Results panel ── */
   #resultsPanel {
     background: var(--bg2);
     border-left: 1px solid var(--border);
@@ -244,7 +241,6 @@
     line-height: 1.6;
   }
 
-  /* ── Video player overlay ── */
   #playerOverlay {
     background: #000;
     display: none;
@@ -263,7 +259,7 @@
 
   #playerBar {
     align-items: center;
-    background: rgba(0,0,0,0.8);
+    background: rgba(0,0,0,0.85);
     display: flex;
     gap: 12px;
     padding: 10px 16px;
@@ -277,17 +273,22 @@
     white-space: nowrap;
   }
 
+  #playerStatus {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
   #playerError {
     color: var(--red);
     font-size: 0.85rem;
     padding: 12px 16px;
     display: none;
+    background: rgba(255,107,107,0.1);
   }
 </style>
 </head>
 <body>
 
-<!-- Top bar -->
 <div id="topbar">
   <span id="appName">STREAMTV</span>
   <input id="urlInput" type="text" placeholder="Enter URL…" />
@@ -297,10 +298,7 @@
   <span id="currentUrl"></span>
 </div>
 
-<!-- Main -->
 <div id="main">
-
-  <!-- Browser screenshot -->
   <div id="browserPanel">
     <div id="screenshotWrap">
       <img id="screenshot" src="" alt="" />
@@ -313,46 +311,48 @@
     </div>
   </div>
 
-  <!-- Results panel -->
   <div id="resultsPanel">
     <div id="resultsHeader">Stream Links (<span id="streamCount">0</span>)</div>
     <div id="streamList">
-      <div id="emptyState">Navigate to a page with a video player, then click Scan to find stream links.</div>
+      <div id="emptyState">Navigate to a page with a video player, then click Scan.</div>
     </div>
   </div>
-
 </div>
 
-<!-- Player overlay -->
 <div id="playerOverlay">
   <video id="videoPlayer" controls autoplay></video>
   <div id="playerError"></div>
   <div id="playerBar">
     <span id="playerTitle"></span>
+    <span id="playerStatus"></span>
     <button class="btn secondary" id="btnClosePlayer">✕ Close</button>
   </div>
 </div>
 
 <script>
-  const urlInput    = document.getElementById('urlInput');
-  const btnGo       = document.getElementById('btnGo');
-  const btnBack     = document.getElementById('btnBack');
-  const btnScan     = document.getElementById('btnScan');
-  const btnScrollUp = document.getElementById('btnScrollUp');
-  const btnScrollDown = document.getElementById('btnScrollDown');
-  const screenshot  = document.getElementById('screenshot');
-  const loading     = document.getElementById('loadingOverlay');
-  const status      = document.getElementById('status');
-  const currentUrl  = document.getElementById('currentUrl');
-  const streamList  = document.getElementById('streamList');
-  const streamCount = document.getElementById('streamCount');
-  const emptyState  = document.getElementById('emptyState');
-  const playerOverlay = document.getElementById('playerOverlay');
-  const videoPlayer = document.getElementById('videoPlayer');
-  const playerTitle = document.getElementById('playerTitle');
-  const playerError = document.getElementById('playerError');
+  const urlInput       = document.getElementById('urlInput');
+  const btnGo          = document.getElementById('btnGo');
+  const btnBack        = document.getElementById('btnBack');
+  const btnScan        = document.getElementById('btnScan');
+  const btnScrollUp    = document.getElementById('btnScrollUp');
+  const btnScrollDown  = document.getElementById('btnScrollDown');
+  const screenshot     = document.getElementById('screenshot');
+  const loading        = document.getElementById('loadingOverlay');
+  const status         = document.getElementById('status');
+  const currentUrlEl   = document.getElementById('currentUrl');
+  const streamList     = document.getElementById('streamList');
+  const streamCount    = document.getElementById('streamCount');
+  const emptyState     = document.getElementById('emptyState');
+  const playerOverlay  = document.getElementById('playerOverlay');
+  const videoPlayer    = document.getElementById('videoPlayer');
+  const playerTitle    = document.getElementById('playerTitle');
+  const playerStatus   = document.getElementById('playerStatus');
+  const playerError    = document.getElementById('playerError');
   const btnClosePlayer = document.getElementById('btnClosePlayer');
   const screenshotWrap = document.getElementById('screenshotWrap');
+
+  let currentPageUrl = '';
+  let hlsInstance = null;
 
   function setLoading(on) {
     loading.classList.toggle('active', on);
@@ -361,11 +361,10 @@
   }
 
   function updateView(data) {
-    if (data.screenshot) {
-      screenshot.src = 'data:image/jpeg;base64,' + data.screenshot;
-    }
+    if (data.screenshot) screenshot.src = 'data:image/jpeg;base64,' + data.screenshot;
     if (data.currentUrl) {
-      currentUrl.textContent = data.currentUrl;
+      currentPageUrl = data.currentUrl;
+      currentUrlEl.textContent = data.currentUrl;
       urlInput.value = data.currentUrl;
     }
   }
@@ -379,7 +378,6 @@
     return r.json();
   }
 
-  // Navigate
   async function navigate() {
     const url = urlInput.value.trim();
     if (!url) return;
@@ -389,7 +387,7 @@
       const data = await post('/api/navigate', { url });
       if (data.error) { status.textContent = 'Error: ' + data.error; return; }
       updateView(data);
-      status.textContent = 'Click anywhere on the page to interact';
+      status.textContent = 'Click the screenshot to interact with the page';
     } catch (e) {
       status.textContent = 'Failed to load page';
     } finally {
@@ -400,26 +398,20 @@
   btnGo.addEventListener('click', navigate);
   urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') navigate(); });
 
-  // Back
   btnBack.addEventListener('click', async () => {
     setLoading(true);
-    try {
-      const data = await post('/api/back', {});
-      updateView(data);
-    } finally { setLoading(false); }
+    try { updateView(await post('/api/back', {})); }
+    finally { setLoading(false); }
   });
 
-  // Scroll
   btnScrollUp.addEventListener('click', async () => {
-    const data = await post('/api/scroll', { direction: 'up' });
-    updateView(data);
-  });
-  btnScrollDown.addEventListener('click', async () => {
-    const data = await post('/api/scroll', { direction: 'down' });
-    updateView(data);
+    updateView(await post('/api/scroll', { direction: 'up' }));
   });
 
-  // Click on screenshot
+  btnScrollDown.addEventListener('click', async () => {
+    updateView(await post('/api/scroll', { direction: 'down' }));
+  });
+
   screenshotWrap.addEventListener('click', async (e) => {
     if (loading.classList.contains('active')) return;
     const rect = screenshotWrap.getBoundingClientRect();
@@ -431,11 +423,10 @@
       const data = await post('/api/click', { x, y });
       if (data.error) { status.textContent = 'Error: ' + data.error; return; }
       updateView(data);
-      status.textContent = 'Click anywhere on the page to interact';
+      status.textContent = 'Click the screenshot to interact with the page';
     } finally { setLoading(false); }
   });
 
-  // Scan
   btnScan.addEventListener('click', async () => {
     setLoading(true);
     status.textContent = 'Scanning for streams…';
@@ -453,13 +444,13 @@
     if (streams.length === 0) {
       streamList.innerHTML = '';
       streamList.appendChild(emptyState);
-      emptyState.textContent = 'No streams found. Try navigating deeper into the site.';
+      emptyState.textContent = 'No streams found. Navigate deeper and try again.';
       return;
     }
     streamList.innerHTML = streams.map((s, i) => `
       <div class="stream-item" data-index="${i}">
         <div class="stream-top">
-          <span class="badge">${s.type}</span>
+          <span class="badge">${escHtml(s.type)}</span>
           <span class="stream-label">${escHtml(s.label)}</span>
         </div>
         <div class="stream-url">${escHtml(s.url)}</div>
@@ -467,32 +458,80 @@
     `).join('');
 
     streamList.querySelectorAll('.stream-item').forEach(el => {
-      el.addEventListener('click', () => {
-        const s = streams[parseInt(el.dataset.index)];
-        playStream(s);
-      });
+      el.addEventListener('click', () => playStream(streams[parseInt(el.dataset.index)]));
     });
   }
 
   function playStream(stream) {
+    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+
     playerTitle.textContent = stream.label;
     playerError.style.display = 'none';
-    videoPlayer.src = stream.url;
+    playerStatus.textContent = 'Loading…';
     playerOverlay.classList.add('active');
-    videoPlayer.play().catch(() => {
-      playerError.style.display = 'block';
-      playerError.textContent = 'Could not play this stream directly. Try copying the URL into VLC or another player.';
-    });
+
+    const isHLS = /\.m3u8/i.test(stream.url) || stream.type === 'HLS';
+
+    // Proxy the m3u8 through our server to bypass CORS
+    const proxyUrl = '/proxy?referer=' + encodeURIComponent(currentPageUrl) +
+                     '&url=' + encodeURIComponent(stream.url);
+
+    if (isHLS && Hls.isSupported()) {
+      hlsInstance = new Hls({
+        backBufferLength: 120,   // keep 2 min behind for rewinding
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        // Route every segment request through our proxy
+        xhrSetup: function(xhr, url) {
+          // Only proxy external URLs, not already-proxied ones
+          if (!url.startsWith('/proxy')) {
+            const proxied = '/proxy?referer=' + encodeURIComponent(stream.url) +
+                            '&url=' + encodeURIComponent(url);
+            xhr.open('GET', proxied, true);
+          }
+        }
+      });
+      hlsInstance.loadSource(proxyUrl);
+      hlsInstance.attachMedia(videoPlayer);
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+        playerStatus.textContent = '';
+        videoPlayer.play();
+      });
+      hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          playerError.style.display = 'block';
+          playerError.textContent = 'HLS error: ' + (data.details || data.type);
+        }
+      });
+    } else if (isHLS && videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS
+      videoPlayer.src = proxyUrl;
+      videoPlayer.play();
+      playerStatus.textContent = '';
+    } else {
+      // MP4, WebM
+      videoPlayer.src = proxyUrl;
+      videoPlayer.play().catch(err => {
+        playerError.style.display = 'block';
+        playerError.textContent = 'Playback error: ' + err.message;
+      });
+      playerStatus.textContent = '';
+    }
   }
 
   btnClosePlayer.addEventListener('click', () => {
+    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
     videoPlayer.pause();
     videoPlayer.src = '';
+    playerError.style.display = 'none';
+    playerStatus.textContent = '';
     playerOverlay.classList.remove('active');
   });
 
   function escHtml(str) {
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 </script>
 </body>
