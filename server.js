@@ -97,37 +97,50 @@ app.get('/proxy', async (req, res) => {
   const streamUrl = req.query.url;
   if (!streamUrl) return res.status(400).send('no url');
 
-  console.log('PROXY:', streamUrl);  // <-- add this
+  // Unwrap double-proxied URLs
+  const finalUrl = streamUrl.startsWith('http://localhost') || streamUrl.startsWith('https://localhost')
+    ? decodeURIComponent(new URL(streamUrl).searchParams.get('url') || streamUrl)
+    : streamUrl;
 
+  console.log('PROXY:', finalUrl);
+
+  const isSegment = /\.(ts|jpg|jpeg|png|aac|mp4|m4s)(\?|$)/i.test(finalUrl);
+  const isM3U8 = /\.m3u8(\?|$)/i.test(finalUrl) || finalUrl.includes('playlist') || finalUrl.includes('manifest');
+
+  if (isSegment) {
+    // Pipe directly — CDN doesn't care about Referer
+    const client = finalUrl.startsWith('https') ? https : http;
+    client.get(finalUrl, { headers: { 'User-Agent': UA } }, (upstream) => {
+      console.log('SEGMENT STATUS:', upstream.statusCode, finalUrl);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', upstream.headers['content-type'] || 'video/mp2t');
+      res.writeHead(upstream.statusCode);
+      upstream.pipe(res);
+    }).on('error', e => res.status(500).send(e.message));
+    return;
+  }
+
+  // For m3u8 — use Puppeteer to get it with auth cookies
   try {
     const p = await getPage();
-    
     const result = await p.evaluate(async (url) => {
       const r = await fetch(url);
-      const buffer = await r.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buffer));
-      return {
-        status: r.status,
-        contentType: r.headers.get('content-type') || '',
-        bytes
-      };
-    }, streamUrl);
+      const text = await r.text();
+      return { status: r.status, contentType: r.headers.get('content-type') || '', text };
+    }, finalUrl);
 
-    console.log('STATUS:', result.status, streamUrl);  // <-- add this
+    console.log('STATUS:', result.status, finalUrl);
 
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', result.contentType || 'application/octet-stream');
+    res.setHeader('Content-Type', result.contentType || 'application/vnd.apple.mpegurl');
     res.writeHead(result.status);
 
-    const isM3U8 = /\.m3u8/i.test(streamUrl) || result.contentType.includes('mpegurl');
-    const body = Buffer.from(result.bytes);
-
     if (isM3U8) {
-      const text = body.toString('utf8');
-      const base = streamUrl.substring(0, streamUrl.lastIndexOf('/') + 1);
-      const rewritten = text.split('\n').map(line => {
+      const base = finalUrl.substring(0, finalUrl.lastIndexOf('/') + 1);
+      const rewritten = result.text.split('\n').map(line => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) return line;
+        if (trimmed.includes('localhost') || trimmed.startsWith('/proxy')) return line;
         if (trimmed.startsWith('http')) {
           return '/proxy?url=' + encodeURIComponent(trimmed);
         }
@@ -135,9 +148,10 @@ app.get('/proxy', async (req, res) => {
       }).join('\n');
       res.end(rewritten);
     } else {
-      res.end(body);
+      res.end(result.text);
     }
   } catch (err) {
+    console.error('PROXY ERROR:', err.message);
     res.status(500).send('Proxy error: ' + err.message);
   }
 });
