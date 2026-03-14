@@ -38,9 +38,9 @@ let capturedStreams = [];
 
 async function getBrowser() {
   if (!browser) {
-    browser = await chromium.puppeteer.launch({
+    browser = await puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath,
+      executablePath: await chromium.executablePath(),
       headless: chromium.headless,
     });
   }
