@@ -629,19 +629,16 @@ async function openAndPlay(idx) {
 }
 
 function showVlcButton(url, label) {
-  // Remove any existing VLC button
   document.getElementById('vlcBtn')?.remove();
   const btn = document.createElement('button');
   btn.id = 'vlcBtn';
   btn.className = 'btn secondary';
-  btn.style.cssText = 'background:#e8a000;color:#000;font-weight:700;';
+  btn.style.cssText = 'background:#e8a000;color:#000;font-weight:700;letter-spacing:0.05em;';
   btn.textContent = '📺 Open in VLC';
   btn.onclick = () => {
-    // vlc:// protocol opens VLC on most platforms
-    // Also copy to clipboard as fallback
-    const vlcUrl = 'vlc://' + url;
-    window.open(vlcUrl, '_blank');
-    navigator.clipboard?.writeText(url).catch(() => {});
+    // Android intent URL — launches VLC directly on Android/Android TV
+    const intentUrl = `intent:${url}#Intent;package=org.videolan.vlc;type=video/any;scheme=https;end`;
+    window.location.href = intentUrl;
   };
   playerBar.insertBefore(btn, closeBtn);
 }
