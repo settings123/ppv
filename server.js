@@ -88,26 +88,21 @@ function extractSlugsFromText(text, slugs) {
 async function getNBAGameSlugs() {
   const slugs = new Set();
 
-  // Probe multiple possible API endpoints
+  // Working endpoints return 200 with full stream list
   const candidates = [
-    'https://api.ppv.to/api/streams/nba',
-    'https://api.ppv.st/api/streams/nba',
     'https://api.ppv.to/api/streams?sport=nba',
     'https://api.ppv.to/api/streams?category=nba',
-    'https://api.ppv.to/api/events?sport=nba',
-    'https://api.ppv.to/api/live',
     'https://api.ppv.to/api/streams',
     'https://api.ppv.st/api/streams',
-    'https://api.ppv.st/api/live',
   ];
 
   for (const url of candidates) {
     try {
       const { status, body } = await fetchRaw(url);
-      console.log(`API ${url} status=${status} preview=${body.slice(0,150)}`);
+      console.log(`API ${url} status=${status} len=${body.length} preview=${body.slice(0,300)}`);
       if (status === 200) {
         extractSlugsFromText(body, slugs);
-        if (slugs.size) { console.log(`Got slugs from ${url}`); break; }
+        if (slugs.size) { console.log(`Got ${slugs.size} slugs from ${url}`); break; }
       }
     } catch(e) { console.log(`API ${url} error: ${e.message}`); }
   }
