@@ -615,12 +615,9 @@ async function openAndPlay(idx) {
       return;
     }
 
-    // Show VLC button with raw URL (IP-locked to server, open in VLC on same network)
-    if (data.rawUrl) {
-      playerInfo.textContent = 'Open in VLC for best quality';
-      showVlcButton(data.rawUrl, s.label);
-    }
-
+    // Use relay URL — served from our server so no IP lock, works in any player
+    const relayUrl = window.location.origin + data.proxyUrl;
+    showVlcButton(relayUrl, s.label);
     playHLS(data.proxyUrl, s);
   } catch (err) {
     playerSpinner.classList.remove('active');
@@ -631,30 +628,39 @@ async function openAndPlay(idx) {
 
 function showVlcButton(url, label) {
   document.getElementById('vlcBtn')?.remove();
+  document.getElementById('vlcUrlBar')?.remove();
 
-  // /open-vlc serves a redirect to the stream with .m3u8 extension in the path
-  // which Google TV's browser will offer to open with VLC
+  // VLC button — navigates to /open-vlc which serves m3u8 MIME type
+  // triggering Google TV's "Open with" dialog
   const openUrl = '/open-vlc?url=' + encodeURIComponent(url) + '&title=' + encodeURIComponent(label);
-
   const btn = document.createElement('button');
   btn.id = 'vlcBtn';
   btn.className = 'btn secondary';
   btn.style.cssText = 'background:#e8a000;color:#000;font-weight:700;letter-spacing:0.05em;';
-  btn.textContent = '📺 VLC';
-  btn.onclick = () => {
-    // Navigate directly — Google TV browser will prompt "Open with VLC"
-    window.location.href = openUrl;
-  };
+  btn.textContent = '📺 Open in Player';
+  btn.onclick = () => { window.location.href = openUrl; };
   playerBar.insertBefore(btn, closeBtn);
 
-  // Also show the raw URL so user can manually paste into VLC network stream
-  document.getElementById('vlcUrl')?.remove();
-  const urlDiv = document.createElement('div');
-  urlDiv.id = 'vlcUrl';
-  urlDiv.style.cssText = 'font-size:0.7rem;color:var(--muted);font-family:monospace;padding:6px 16px;word-break:break-all;background:var(--bg2);';
-  urlDiv.textContent = url;
-  urlDiv.onclick = () => navigator.clipboard?.writeText(url).catch(() => {});
-  playerBar.parentNode.insertBefore(urlDiv, playerBar);
+  // Show relay URL — paste this into VLC > Network Stream
+  // This URL is served from YOUR server so it works from any device/IP
+  const bar = document.createElement('div');
+  bar.id = 'vlcUrlBar';
+  bar.style.cssText = `
+    position:absolute; bottom:100%; left:0; right:0;
+    background:var(--bg3); border-top:1px solid var(--border);
+    padding:10px 16px; display:flex; align-items:center; gap:10px;
+  `;
+  bar.innerHTML = `
+    <span style="font-family:var(--head);font-size:0.75rem;color:var(--muted);white-space:nowrap;text-transform:uppercase;letter-spacing:0.08em;">VLC Network URL:</span>
+    <span id="vlcUrlText" style="font-family:monospace;font-size:0.72rem;color:var(--accent);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${url}</span>
+    <button onclick="navigator.clipboard?.writeText('${url.replace(/'/g,"\'")}').then(()=>{this.textContent='✓ Copied';setTimeout(()=>this.textContent='Copy',1500)})" 
+      style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer;font-family:var(--head);font-size:0.75rem;padding:4px 12px;white-space:nowrap;">
+      Copy
+    </button>
+  `;
+  playerOverlay.style.position = 'fixed';
+  playerBar.style.position = 'relative';
+  playerBar.appendChild(bar);
 }
 
 function playHLS(proxyUrl, s) {
