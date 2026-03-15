@@ -1,17 +1,28 @@
-// server.js
-const express = require('express');
-const path    = require('path');
-const https   = require('https');
-const http    = require('http');
+// server.js (ES module)
+import express from 'express';
+import path from 'path';
+import https from 'https';
+import http from 'http';
+import { fileURLToPath } from 'url';
 
-const IS_CLOUD = !!(process.env.RENDER || process.env.KOYEB || process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
+// Detect cloud environment
+const IS_CLOUD = !!(
+  process.env.RENDER ||
+  process.env.KOYEB ||
+  process.env.RAILWAY_ENVIRONMENT ||
+  process.env.FLY_APP_NAME
+);
+
+// Puppeteer setup
 let puppeteer, chromium;
 if (IS_CLOUD) {
-  puppeteer = require('puppeteer-core');
-  chromium  = require('@sparticuz/chromium');
+  puppeteer = await import('puppeteer-core').then(m => m.default);
+  chromium  = await import('@sparticuz/chromium').then(m => m.default);
 } else {
-  puppeteer = require('puppeteer');
+  puppeteer = await import('puppeteer').then(m => m.default);
 }
 
 const app = express();
@@ -107,9 +118,8 @@ const sessions = new Map();
 
 // ── Stream opening ───────────────────────────────────────────────────────────
 async function openStream(slug) {
-  // simplified placeholder: in real use, run WASM/Puppeteer to get m3u8
   console.log(`[DEBUG] openStream called for slug=${slug}`);
-  return null;
+  return null; // Placeholder: plug WASM/Puppeteer decryption here
 }
 
 // ── Stremio addon endpoints ──────────────────────────────────────────────────
