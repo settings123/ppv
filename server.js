@@ -90,7 +90,7 @@ function extractSlugsFromApi(data, slugs) {
   // New API format: { streams: [{ category: "NBA", streams: [{ slug: "nba/..." }] }] }
   if (!data || !Array.isArray(data.streams)) return;
   for (const cat of data.streams) {
-    if (!cat.category || !cat.category.toLowerCase().includes('nba')) continue;
+    if (!cat.category || !cat.category.toLowerCase().includes('basketball')) continue;
     if (!Array.isArray(cat.streams)) continue;
     for (const s of cat.streams) {
       if (s.slug) slugs.add(s.slug);
@@ -486,10 +486,12 @@ app.get('/debug', async (req, res) => {
     const data = JSON.parse(body);
     const slugs = new Set();
     extractSlugsFromApi(data, slugs);
+    const basketball = data.streams?.find(c => c.category?.toLowerCase().includes('basketball'));
     out.api = {
       status,
       categories: data.streams?.map(c => ({ category: c.category, count: c.streams?.length })),
       nba_slugs: [...slugs],
+      basketball_sample: basketball?.streams?.slice(0, 3),
     };
   } catch(e) { out.apiError = e.message; }
   res.json(out);
