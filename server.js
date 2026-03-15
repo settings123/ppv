@@ -53,12 +53,12 @@ function labelFromSlug(slug) {
   return matchup.split('-').map(p => p.toUpperCase()).join(' vs ').replace(' VS ', ' vs ');
 }
 
-function fetchJson(url) {
+function fetchRaw(url) {
   return new Promise((resolve, reject) => {
     https.get(url, { headers: { 'User-Agent': UA, 'Origin': ORIGIN, 'Referer': ORIGIN+'/', 'Accept': 'application/json' } }, r => {
       let body = '';
       r.on('data', d => body += d);
-      r.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
+      r.on('end', () => resolve({ status: r.statusCode, body }));
     }).on('error', reject);
   });
 }
@@ -69,26 +69,40 @@ function extractSlugsFromText(text, slugs) {
 
 async function getNBAGameSlugs() {
   const slugs = new Set();
+
+  // Strategy 1: direct API
   for (const url of ['https://api.ppv.to/api/streams/nba','https://api.ppv.st/api/streams/nba']) {
     try {
-      const data = await fetchJson(url);
-      if (data) { extractSlugsFromText(JSON.stringify(data), slugs); if (slugs.size) break; }
-    } catch {}
+      const { status, body } = await fetchRaw(url);
+      console.log(`API ${url} → status=${status} len=${body.length} preview=${body.slice(0,120)}`);
+      extractSlugsFromText(body, slugs);
+      if (slugs.size) { console.log(`Got ${slugs.size} slugs from API`); break; }
+    } catch(e) { console.log(`API ${url} error: ${e.message}`); }
   }
+
+  // Strategy 2: Puppeteer browser intercept
   if (!slugs.size) {
+    console.log('Falling back to Puppeteer intercept...');
     const p = await newPage();
     p.on('response', async r => {
-      if (!r.url().includes('api.ppv')) return;
-      try { extractSlugsFromText(await r.text(), slugs); } catch {}
+      const u = r.url();
+      if (!u.includes('api.ppv.to') && !u.includes('api.ppv.st')) return;
+      try {
+        const text = await r.text();
+        console.log(`Intercepted ${u} → ${text.slice(0,120)}`);
+        extractSlugsFromText(text, slugs);
+      } catch {}
     });
     try {
       await p.goto(ORIGIN, { waitUntil: 'networkidle2', timeout: 30000 });
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 4000));
       const links = await p.evaluate(() => [...document.querySelectorAll('a[href]')].map(a => a.href));
+      console.log(`DOM links: ${links.filter(l=>l.includes('ppv.to/live')).join(', ')}`);
       links.forEach(u => extractSlugsFromText(u, slugs));
     } finally { await p.close().catch(() => {}); }
   }
-  console.log(`Slugs (${slugs.size}):`, [...slugs]);
+
+  console.log(`Final slugs (${slugs.size}):`, [...slugs]);
   return [...slugs];
 }
 
@@ -327,6 +341,40 @@ app.get('/relay/seg', async (req, res) => {
     console.error('[relay seg] error:', err.message);
     res.status(500).send(err.message);
   }
+});
+
+
+// ── Debug — hit from any browser to diagnose without the TV ──────────────────
+app.get('/debug', async (req, res) => {
+  const out = { time: new Date().toISOString(), tests: {} };
+
+  // Test 1: direct API call
+  for (const url of ['https://api.ppv.to/api/streams/nba','https://api.ppv.st/api/streams/nba']) {
+    try {
+      const data = await fetchJson(url);
+      const text = JSON.stringify(data||'');
+      const slugs = new Set();
+      extractSlugsFromText(text, slugs);
+      out.tests[url] = { ok: !!data, slugCount: slugs.size, slugs: [...slugs], preview: text.slice(0,200) };
+      if (slugs.size) break;
+    } catch(e) { out.tests[url] = { error: e.message }; }
+  }
+
+  // Test 2: active sessions
+  out.activeSessions = [...sessions.keys()];
+
+  res.json(out);
+});
+
+
+// ── M3U playlist endpoint — Android opens .m3u files with VLC automatically ──
+app.get('/playlist.m3u', (req, res) => {
+  const url   = req.query.url;
+  const title = req.query.title || 'Stream';
+  if (!url) return res.status(400).send('missing url');
+  res.setHeader('Content-Type', 'audio/x-mpegurl');
+  res.setHeader('Content-Disposition', `attachment; filename="${title.replace(/[^a-z0-9]/gi,'_')}.m3u"`);
+  res.end(`#EXTM3U\n#EXTINF:-1,${title}\n${url}\n`);
 });
 
 app.listen(PORT, () => console.log(`StreamTV on port ${PORT}`));
