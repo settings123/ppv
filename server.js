@@ -314,43 +314,41 @@ app.get('/catalog/tv/nba_live.json', async (req, res) => {
   try {
     const slugs = await getNBAGameSlugs();
     const metas = slugs.map(slug => ({
-      id:          'nba_' + slug.replace(/\//g, '_'),
+      id:          'nba_' + Buffer.from(slug).toString('base64url'),
       type:        'tv',
       name:        labelFromSlug(slug),
-      poster:      'https://ppv.to/assets/img/ppv_to.png',
-      background:  'https://ppv.to/assets/img/ppv_to.png',
-      description: `Live NBA: ${labelFromSlug(slug)}`,
+      description: 'Live NBA: ' + labelFromSlug(slug),
     }));
+    console.log('[catalog] metas:', metas.map(m => m.id + ' -> ' + m.name));
     res.json({ metas });
   } catch(e) {
+    console.error('[catalog] error:', e.message);
     res.json({ metas: [] });
   }
 });
 
 app.get('/stream/tv/:id.json', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  const id   = req.params.id; // nba_nba_2026-03-15_min-okc
-  const slug = id.replace(/^nba_/, '').replace(/_/g, '/').replace(/\/(\d{2})\/(\d{2})\//, '/$1-$2/').replace('nba/', 'nba/');
+  const id = req.params.id;
+  console.log('[stremio stream] raw id:', id);
 
-  // Reconstruct slug: nba_2026-03-15_min-okc -> nba/2026-03-15/min-okc
-  const parts = id.replace(/^nba_/, '').split('_');
-  // parts: ['nba', '2026-03-15', 'min-okc']
-  const realSlug = parts.join('/');
+  let slug;
+  try {
+    slug = Buffer.from(id.replace(/^nba_/, ''), 'base64url').toString('utf8');
+  } catch(e) {
+    console.error('[stremio] bad id:', id, e.message);
+    return res.json({ streams: [] });
+  }
+  console.log('[stremio stream] slug:', slug);
 
   try {
-    console.log(`[stremio stream] id=${id} slug=${realSlug}`);
-    const result = await openStream(realSlug);
-    if (!result) return res.json({ streams: [] });
-    sessions.set(realSlug, { m3u8Url: result.url, reqHeaders: result.headers });
-    const safeSlug = encodeURIComponent(realSlug);
+    const result = await openStream(slug);
+    if (!result) { console.log('[stremio] no stream for', slug); return res.json({ streams: [] }); }
+    sessions.set(slug, { m3u8Url: result.url, reqHeaders: result.headers });
     const base = req.protocol + '://' + req.get('host');
-    res.json({
-      streams: [{
-        name:  'StreamTV',
-        title: labelFromSlug(realSlug),
-        url:   `${base}/relay/m3u8?slug=${safeSlug}`,
-      }]
-    });
+    const streamUrl = base + '/relay/m3u8?slug=' + encodeURIComponent(slug);
+    console.log('[stremio] returning stream:', streamUrl);
+    res.json({ streams: [{ name: 'StreamTV NBA', title: labelFromSlug(slug), url: streamUrl }] });
   } catch(e) {
     console.error('[stremio stream] error:', e.message);
     res.json({ streams: [] });
