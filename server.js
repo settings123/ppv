@@ -469,13 +469,19 @@ app.get('/stream/channel/:id.json', async (req, res) => {
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
 app.get('/debug', async (req, res) => {
-  const out = { sessions: [...sessions.keys()], time: new Date().toISOString() };
-  try {
-    const { body } = await fetchRaw('https://api.ppv.to/api/streams/nba');
-    const slugs = new Set();
-    extractSlugsFromText(body, slugs);
-    out.api = { slugs: [...slugs], preview: body.slice(0, 200) };
-  } catch(e) { out.apiError = e.message; }
+  const out = { sessions: [...sessions.keys()], time: new Date().toISOString(), tests: {} };
+  for (const url of [
+    'https://api.ppv.to/api/streams?sport=nba',
+    'https://api.ppv.to/api/streams',
+    'https://api.ppv.st/api/streams',
+  ]) {
+    try {
+      const { status, body } = await fetchRaw(url);
+      const slugs = new Set();
+      extractSlugsFromText(body, slugs);
+      out.tests[url] = { status, slugs: [...slugs], preview: body.slice(0, 400) };
+    } catch(e) { out.tests[url] = { error: e.message }; }
+  }
   res.json(out);
 });
 
