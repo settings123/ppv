@@ -115,27 +115,33 @@ async function openStream(slug) {
     }).catch(() => {});
 
     const result = await new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(null), 35000);
+      const timer = setTimeout(() => {
+        console.log(`[openStream] TIMEOUT after 35s for ${slug}`);
+        resolve(null);
+      }, 35000);
 
       client.on('Network.requestWillBeSent', ({ request }) => {
         const u = request.url;
+        console.log(`[net] ${u.slice(0, 80)}`);
         if (/\.m3u8/i.test(u) && !u.includes('pooembed')) {
-          console.log(`[m3u8] ${u}`);
-          console.log(`[headers] ${JSON.stringify(request.headers)}`);
+          console.log(`[m3u8 found] ${u}`);
           clearTimeout(timer);
           resolve({ url: u, headers: request.headers });
         }
       });
 
-      p.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
-        .then(() => new Promise(r => setTimeout(r, 6000)))
-        .then(() => p.evaluate(() => {
+      p.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 25000 })
+        .then(() => { console.log(`[openStream] page loaded for ${slug}`); return new Promise(r => setTimeout(r, 8000)); })
+        .then(() => { console.log(`[openStream] clicking play`); return p.evaluate(() => {
           for (const s of ['.jw-display-icon-container','.jw-icon-display','[aria-label="Play"]','video','#player']) {
-            const el = document.querySelector(s); if (el) { el.click(); return; }
+            const el = document.querySelector(s); if (el) { el.click(); return s; }
           }
-        }).catch(() => {}))
-        .then(() => p.mouse.click(640, 360).catch(() => {}))
-        .catch(() => {});
+          return 'none';
+        }); })
+        .then(clicked => { console.log(`[openStream] clicked: ${clicked}`); return p.mouse.click(640, 360); })
+        .then(() => new Promise(r => setTimeout(r, 8000)))
+        .then(() => { console.log(`[openStream] still no m3u8 after click+wait`); })
+        .catch(e => console.error(`[openStream] error: ${e.message}`));
     });
 
     return result;
@@ -295,6 +301,11 @@ app.get('/relay/seg', async (req, res) => {
 });
 
 // ── Stremio addon ─────────────────────────────────────────────────────────────
+// Short install URL — paste yourapp.onrender.com/s into Stremio
+app.get('/s', (req, res) => {
+  res.redirect('/manifest.json');
+});
+
 app.get('/manifest.json', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.json({
