@@ -367,9 +367,23 @@ app.get('/debug', async (req, res) => {
 });
 
 
-// ── M3U playlist endpoint — Android opens .m3u files with VLC automatically ──
+// ── /open-vlc — serves stream as video/mp4 MIME so Google TV prompts VLC ─────
+// Google TV browser will show "Open with" dialog when it receives video content
+app.get('/open-vlc', (req, res) => {
+  const url   = decodeURIComponent(req.query.url || '');
+  const title = req.query.title || 'Stream';
+  if (!url) return res.status(400).send('missing url');
+
+  // Serve an M3U8 playlist pointing at the stream — video/mp4 triggers "Open with" on Google TV
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Content-Disposition', `inline; filename="stream.m3u8"`);
+  // If it's already an m3u8 URL, redirect straight to it with the right headers
+  res.end(`#EXTM3U\n#EXTINF:-1 tvg-name="${title}",${title}\n${url}\n`);
+});
+
+// ── /playlist.m3u — plain m3u for manual VLC "open network" paste ────────────
 app.get('/playlist.m3u', (req, res) => {
-  const url   = req.query.url;
+  const url   = decodeURIComponent(req.query.url || '');
   const title = req.query.title || 'Stream';
   if (!url) return res.status(400).send('missing url');
   res.setHeader('Content-Type', 'audio/x-mpegurl');
