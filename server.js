@@ -555,4 +555,6 @@ app.get('/open-vlc', (req, res) => {
   res.end(`#EXTM3U\n#EXTINF:-1,${title}\n${url}\n`);
 });
 
-app.listen(PORT, () => console.log(`StreamTV on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`StreamTV running on port ${PORT}`);
+});
