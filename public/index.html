@@ -489,6 +489,7 @@ const closeBtn      = document.getElementById('closeBtn');
 
 // ── Crawl ──────────────────────────────────────────────────────────────────────
 crawlBtn.addEventListener('click', startCrawl);
+window.addEventListener('load', startCrawl);
 
 async function startCrawl() {
   crawlBtn.disabled = true;
@@ -630,15 +631,23 @@ async function openAndPlay(idx) {
 
 function showVlcButton(url, label) {
   document.getElementById('vlcBtn')?.remove();
+
+  // Wrap in a server-side m3u playlist so VLC gets a clean URL
+  const playlistUrl = '/playlist.m3u?url=' + encodeURIComponent(url) + '&title=' + encodeURIComponent(label);
+  const absPlaylistUrl = window.location.origin + playlistUrl;
+
   const btn = document.createElement('button');
   btn.id = 'vlcBtn';
   btn.className = 'btn secondary';
   btn.style.cssText = 'background:#e8a000;color:#000;font-weight:700;letter-spacing:0.05em;';
-  btn.textContent = '📺 Open in VLC';
+  btn.textContent = '📺 VLC';
   btn.onclick = () => {
-    // Android intent URL — launches VLC directly on Android/Android TV
-    const intentUrl = `intent:${url}#Intent;package=org.videolan.vlc;type=video/any;scheme=https;end`;
+    // Try Android TV intent first, fall back to direct download of .m3u file
+    // which Android will offer to open with VLC
+    const intentUrl = `intent:${absPlaylistUrl}#Intent;action=android.intent.action.VIEW;type=audio/x-mpegurl;package=org.videolan.vlc;end`;
     window.location.href = intentUrl;
+    // Fallback: if intent doesn't fire within 1s, trigger direct download
+    setTimeout(() => { window.open(playlistUrl, '_blank'); }, 1500);
   };
   playerBar.insertBefore(btn, closeBtn);
 }
