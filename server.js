@@ -157,85 +157,90 @@ async function getNBAGameSlugs() {
 const sessions = new Map();
 
 async function openStream(slug) {
-  const existing = sessions.get(slug);
-  if (existing) sessions.delete(slug);
-
   const embedUrl = `https://pooembed.eu/embed/${slug}`;
   const p = await newPage();
 
   try {
     const client = await p.createCDPSession();
     await client.send('Network.enable');
-    await client.send('Target.setAutoAttach', {
-      autoAttach: true, waitForDebuggerOnStart: false, flatten: true
-    }).catch(() => {});
 
     const result = await new Promise((resolve) => {
+
       const timer = setTimeout(() => {
         console.log(`[openStream] TIMEOUT for ${slug}`);
         resolve(null);
-      }, 45000);
+      }, 60000);
 
-      // Method 1: catch m3u8 request directly (works if JWPlayer starts)
+      // Capture ANY m3u8 request
       client.on('Network.requestWillBeSent', ({ request }) => {
-        const u = request.url;
-        if (/\.m3u8/i.test(u) && !u.includes('pooembed')) {
-          console.log(`[m3u8] ${u}`);
+
+        const url = request.url;
+
+        if (url.includes('.m3u8') && !url.includes('pooembed')) {
+
+          console.log('[m3u8 request]', url);
+
           clearTimeout(timer);
-          resolve({ url: u, headers: request.headers });
+
+          resolve({
+            url,
+            headers: request.headers
+          });
         }
       });
 
-      // Method 2: intercept /fetch response, extract URL using page's WASM context
-      // After /fetch returns, the WASM decrypts it — we hook into that via page.evaluate
-      client.on('Network.responseReceived', async ({ requestId, response }) => {
-        if (!response.url.endsWith('/fetch')) return;
-        console.log(`[/fetch] intercepted, waiting for WASM decrypt...`);
-        // Give WASM time to decrypt, then query JWPlayer's config directly
-        setTimeout(async () => {
-          try {
-            const url = await p.evaluate(() => {
-              // Try to get URL from JWPlayer instance
-              if (window.jwplayer) {
-                try {
-                  const p = window.jwplayer();
-                  if (p && p.getPlaylist) {
-                    const pl = p.getPlaylist();
-                    if (pl && pl[0]) {
-                      const f = pl[0].file || (pl[0].sources && pl[0].sources[0] && pl[0].sources[0].file);
-                      if (f && f.includes('.m3u8')) return f;
-                    }
-                  }
-                } catch {}
-              }
-              // Also scan all JS variables for modifiles URL
-              const html = document.documentElement.innerHTML;
-              const m = html.match(/https?:\/\/[a-z0-9.-]+\/secure\/[A-Za-z0-9]+\/\d+\/\d+\/[a-z]+\/[a-z0-9/.]+\.m3u8/i);
-              return m ? m[0] : null;
-            }).catch(() => null);
-            if (url) {
-              console.log(`[jwplayer extract] ${url}`);
-              clearTimeout(timer);
-              resolve({ url, headers: {} });
-            }
-          } catch(e) { console.log(`[jwplayer extract error] ${e.message}`); }
-        }, 3000); // wait 3s for WASM to finish
-      });
+      (async () => {
 
-      p.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 25000 })
-        .then(() => new Promise(r => setTimeout(r, 8000)))
-        .then(() => p.evaluate(() => {
-          for (const s of ['.jw-display-icon-container','.jw-icon-display','[aria-label="Play"]','video','#player']) {
-            const el = document.querySelector(s); if (el) { el.click(); return s; }
-          }
-        }).catch(() => {}))
-        .then(() => p.mouse.click(640, 360).catch(() => {}))
-        .catch(e => console.error(`[goto error] ${e.message}`));
+        try {
+
+          await p.goto(embedUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
+          });
+
+          await new Promise(r => setTimeout(r, 6000));
+
+          // Try to start playback
+          await p.evaluate(() => {
+
+            const btns = [
+              '.jw-icon-display',
+              '.jw-display-icon-container',
+              '.jw-icon-play',
+              '.jw-button-container'
+            ];
+
+            for (const s of btns) {
+              const el = document.querySelector(s);
+              if (el) {
+                el.click();
+                break;
+              }
+            }
+
+            const v = document.querySelector('video');
+            if (v) v.play().catch(()=>{});
+
+          });
+
+          await p.mouse.click(640, 360).catch(()=>{});
+
+        } catch (e) {
+
+          console.log('[goto error]', e.message);
+
+        }
+
+      })();
+
     });
 
     return result;
+
   } finally {
-    await p.close().catch(() => {});
+
+    await p.close().catch(()=>{});
+
   }
 }
 
@@ -453,29 +458,72 @@ app.get('/meta/channel/:id.json', (req, res) => {
 });
 
 app.get('/stream/channel/:id.json', async (req, res) => {
+
   res.setHeader('Access-Control-Allow-Origin', '*');
+
   const id = req.params.id;
+
   console.log('[stremio stream] id:', id);
 
   let slug;
-  try { slug = slugFromId(id); } catch(e) {
-    console.error('[stremio] bad id:', id);
+
+  try {
+    slug = slugFromId(id);
+  } catch (err) {
+    console.error('[stremio] invalid id:', id);
     return res.json({ streams: [] });
   }
+
   console.log('[stremio stream] slug:', slug);
 
   try {
+
     const result = await openStream(slug);
-    if (!result) { console.log('[stremio] no stream for', slug); return res.json({ streams: [] }); }
-    sessions.set(slug, { m3u8Url: result.url, reqHeaders: result.headers });
+
+    if (!result || !result.url) {
+
+      console.log('[stremio] no stream found for', slug);
+
+      return res.json({ streams: [] });
+
+    }
+
+    // Save session so relay endpoints can use the headers + token
+    sessions.set(slug, {
+      m3u8Url: result.url,
+      reqHeaders: result.headers || {}
+    });
+
     const base = req.protocol + '://' + req.get('host');
-    const streamUrl = base + '/relay/m3u8?slug=' + encodeURIComponent(slug);
+
+    const streamUrl =
+      base +
+      '/relay/m3u8?slug=' +
+      encodeURIComponent(slug);
+
     console.log('[stremio] stream url:', streamUrl);
-    res.json({ streams: [{ name: 'StreamTV NBA', title: labelFromSlug(slug), url: streamUrl }] });
-  } catch(e) {
-    console.error('[stremio stream] error:', e.message);
+
+    res.json({
+      streams: [
+        {
+          name: 'StreamTV NBA',
+          title: labelFromSlug(slug),
+          url: streamUrl,
+          behaviorHints: {
+            notWebReady: true
+          }
+        }
+      ]
+    });
+
+  } catch (err) {
+
+    console.error('[stremio stream] error:', err.message);
+
     res.json({ streams: [] });
+
   }
+
 });
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
