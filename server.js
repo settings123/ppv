@@ -302,24 +302,34 @@ app.get('/manifest.json', (req, res) => {
     version:     '1.0.0',
     name:        'StreamTV NBA',
     description: 'Live NBA streams from ppv.to',
-    types:       ['tv'],
-    catalogs:    [{ type: 'tv', id: 'nba_live', name: 'NBA Live', extra: [] }],
-    resources:   ['catalog', 'stream'],
+    types:       ['channel'],
+    catalogs:    [{ type: 'channel', id: 'nba_live', name: 'NBA Live' }],
+    resources:   [
+      'catalog',
+      { name: 'meta',   types: ['channel'], idPrefixes: ['nba_'] },
+      { name: 'stream', types: ['channel'], idPrefixes: ['nba_'] },
+    ],
     idPrefixes:  ['nba_'],
   });
 });
 
-app.get('/catalog/tv/nba_live.json', async (req, res) => {
+// Helper to decode slug from Stremio ID
+function slugFromId(id) {
+  return Buffer.from(id.replace(/^nba_/, ''), 'base64url').toString('utf8');
+}
+
+app.get('/catalog/channel/nba_live.json', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
     const slugs = await getNBAGameSlugs();
     const metas = slugs.map(slug => ({
       id:          'nba_' + Buffer.from(slug).toString('base64url'),
-      type:        'tv',
+      type:        'channel',
       name:        labelFromSlug(slug),
       description: 'Live NBA: ' + labelFromSlug(slug),
+      logo:        'https://upload.wikimedia.org/wikipedia/en/thumb/0/03/National_Basketball_Association_logo.svg/200px-National_Basketball_Association_logo.svg.png',
     }));
-    console.log('[catalog] metas:', metas.map(m => m.id + ' -> ' + m.name));
+    console.log('[catalog] returning', metas.length, 'games');
     res.json({ metas });
   } catch(e) {
     console.error('[catalog] error:', e.message);
@@ -327,16 +337,30 @@ app.get('/catalog/tv/nba_live.json', async (req, res) => {
   }
 });
 
-app.get('/stream/tv/:id.json', async (req, res) => {
+app.get('/meta/channel/:id.json', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const id = req.params.id;
-  console.log('[stremio stream] raw id:', id);
+  let slug;
+  try { slug = slugFromId(id); } catch { return res.json({ meta: {} }); }
+  res.json({
+    meta: {
+      id,
+      type:        'channel',
+      name:        labelFromSlug(slug),
+      description: 'Live NBA stream',
+      logo:        'https://upload.wikimedia.org/wikipedia/en/thumb/0/03/National_Basketball_Association_logo.svg/200px-National_Basketball_Association_logo.svg.png',
+    }
+  });
+});
+
+app.get('/stream/channel/:id.json', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const id = req.params.id;
+  console.log('[stremio stream] id:', id);
 
   let slug;
-  try {
-    slug = Buffer.from(id.replace(/^nba_/, ''), 'base64url').toString('utf8');
-  } catch(e) {
-    console.error('[stremio] bad id:', id, e.message);
+  try { slug = slugFromId(id); } catch(e) {
+    console.error('[stremio] bad id:', id);
     return res.json({ streams: [] });
   }
   console.log('[stremio stream] slug:', slug);
@@ -347,7 +371,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
     sessions.set(slug, { m3u8Url: result.url, reqHeaders: result.headers });
     const base = req.protocol + '://' + req.get('host');
     const streamUrl = base + '/relay/m3u8?slug=' + encodeURIComponent(slug);
-    console.log('[stremio] returning stream:', streamUrl);
+    console.log('[stremio] stream url:', streamUrl);
     res.json({ streams: [{ name: 'StreamTV NBA', title: labelFromSlug(slug), url: streamUrl }] });
   } catch(e) {
     console.error('[stremio stream] error:', e.message);
