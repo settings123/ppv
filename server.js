@@ -26,13 +26,32 @@ async function getBrowser() {
   if (!browser || !browser.isConnected()) {
     browser = IS_CLOUD
       ? await puppeteer.launch({
-          args: [...chromium.args, '--autoplay-policy=no-user-gesture-required'],
+          args: [
+            ...chromium.args,
+            '--autoplay-policy=no-user-gesture-required',
+            '--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplayPolicies',
+            '--use-fake-ui-for-media-stream',
+            '--use-fake-device-for-media-stream',
+            '--allow-running-insecure-content',
+            '--disable-web-security',
+            '--no-sandbox',
+          ],
           executablePath: await chromium.executablePath(),
           headless: chromium.headless,
         })
       : await puppeteer.launch({
           headless: 'new',
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--autoplay-policy=no-user-gesture-required'],
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--autoplay-policy=no-user-gesture-required',
+            '--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplayPolicies',
+            '--use-fake-ui-for-media-stream',
+            '--use-fake-device-for-media-stream',
+            '--enable-usermedia-screen-capturing',
+            '--allow-running-insecure-content',
+            '--disable-web-security',
+          ],
         });
     console.log(`Browser [${IS_CLOUD ? 'cloud' : 'local'}]`);
   }
@@ -68,28 +87,59 @@ function extractSlugsFromText(text, slugs) {
 
 async function getNBAGameSlugs() {
   const slugs = new Set();
-  for (const url of ['https://api.ppv.to/api/streams/nba','https://api.ppv.st/api/streams/nba']) {
+
+  // Probe multiple possible API endpoints
+  const candidates = [
+    'https://api.ppv.to/api/streams/nba',
+    'https://api.ppv.st/api/streams/nba',
+    'https://api.ppv.to/api/streams?sport=nba',
+    'https://api.ppv.to/api/streams?category=nba',
+    'https://api.ppv.to/api/events?sport=nba',
+    'https://api.ppv.to/api/live',
+    'https://api.ppv.to/api/streams',
+    'https://api.ppv.st/api/streams',
+    'https://api.ppv.st/api/live',
+  ];
+
+  for (const url of candidates) {
     try {
       const { status, body } = await fetchRaw(url);
-      console.log(`API ${url} status=${status} preview=${body.slice(0,100)}`);
-      extractSlugsFromText(body, slugs);
-      if (slugs.size) break;
-    } catch(e) { console.log(`API error: ${e.message}`); }
+      console.log(`API ${url} status=${status} preview=${body.slice(0,150)}`);
+      if (status === 200) {
+        extractSlugsFromText(body, slugs);
+        if (slugs.size) { console.log(`Got slugs from ${url}`); break; }
+      }
+    } catch(e) { console.log(`API ${url} error: ${e.message}`); }
   }
+
+  // Always fallback to Puppeteer browser intercept — most reliable
   if (!slugs.size) {
+    console.log('Falling back to Puppeteer intercept...');
     const p = await newPage();
+    const found = new Set();
     p.on('response', async r => {
-      if (!r.url().includes('api.ppv')) return;
-      try { extractSlugsFromText(await r.text(), slugs); } catch {}
+      const u = r.url();
+      if (!u.includes('api.ppv.to') && !u.includes('api.ppv.st')) return;
+      try {
+        const text = await r.text();
+        console.log(`Intercepted API: ${u} → ${text.slice(0,200)}`);
+        extractSlugsFromText(text, found);
+      } catch {}
     });
     try {
-      await p.goto(ORIGIN, { waitUntil: 'networkidle2', timeout: 30000 });
-      await new Promise(r => setTimeout(r, 4000));
-      const links = await p.evaluate(() => [...document.querySelectorAll('a[href]')].map(a => a.href));
+      await p.goto('https://ppv.to/live/nba', { waitUntil: 'networkidle2', timeout: 30000 });
+      await new Promise(r => setTimeout(r, 5000));
+      found.forEach(s => slugs.add(s));
+      // Also scrape DOM links
+      const links = await p.evaluate(() =>
+        [...document.querySelectorAll('a[href]')].map(a => a.href).filter(h => h.includes('/live/nba/'))
+      );
+      console.log('DOM nba links:', links);
       links.forEach(u => extractSlugsFromText(u, slugs));
     } finally { await p.close().catch(() => {}); }
   }
-  console.log(`Slugs (${slugs.size}):`, [...slugs]);
+
+  console.log(`Final slugs (${slugs.size}):`, [...slugs]);
   return [...slugs];
 }
 
@@ -116,37 +166,69 @@ async function openStream(slug) {
 
     const result = await new Promise((resolve) => {
       const timer = setTimeout(() => {
-        console.log(`[openStream] TIMEOUT after 35s for ${slug}`);
+        console.log(`[openStream] TIMEOUT for ${slug}`);
         resolve(null);
-      }, 35000);
+      }, 45000);
 
+      // Method 1: catch m3u8 request directly (works if JWPlayer starts)
       client.on('Network.requestWillBeSent', ({ request }) => {
         const u = request.url;
-        console.log(`[net] ${u.slice(0, 80)}`);
         if (/\.m3u8/i.test(u) && !u.includes('pooembed')) {
-          console.log(`[m3u8 found] ${u}`);
+          console.log(`[m3u8] ${u}`);
           clearTimeout(timer);
           resolve({ url: u, headers: request.headers });
         }
       });
 
+      // Method 2: intercept /fetch response, extract URL using page's WASM context
+      // After /fetch returns, the WASM decrypts it — we hook into that via page.evaluate
+      client.on('Network.responseReceived', async ({ requestId, response }) => {
+        if (!response.url.endsWith('/fetch')) return;
+        console.log(`[/fetch] intercepted, waiting for WASM decrypt...`);
+        // Give WASM time to decrypt, then query JWPlayer's config directly
+        setTimeout(async () => {
+          try {
+            const url = await p.evaluate(() => {
+              // Try to get URL from JWPlayer instance
+              if (window.jwplayer) {
+                try {
+                  const p = window.jwplayer();
+                  if (p && p.getPlaylist) {
+                    const pl = p.getPlaylist();
+                    if (pl && pl[0]) {
+                      const f = pl[0].file || (pl[0].sources && pl[0].sources[0] && pl[0].sources[0].file);
+                      if (f && f.includes('.m3u8')) return f;
+                    }
+                  }
+                } catch {}
+              }
+              // Also scan all JS variables for modifiles URL
+              const html = document.documentElement.innerHTML;
+              const m = html.match(/https?:\/\/[a-z0-9.-]+\/secure\/[A-Za-z0-9]+\/\d+\/\d+\/[a-z]+\/[a-z0-9/.]+\.m3u8/i);
+              return m ? m[0] : null;
+            }).catch(() => null);
+            if (url) {
+              console.log(`[jwplayer extract] ${url}`);
+              clearTimeout(timer);
+              resolve({ url, headers: {} });
+            }
+          } catch(e) { console.log(`[jwplayer extract error] ${e.message}`); }
+        }, 3000); // wait 3s for WASM to finish
+      });
+
       p.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 25000 })
-        .then(() => { console.log(`[openStream] page loaded for ${slug}`); return new Promise(r => setTimeout(r, 8000)); })
-        .then(() => { console.log(`[openStream] clicking play`); return p.evaluate(() => {
+        .then(() => new Promise(r => setTimeout(r, 8000)))
+        .then(() => p.evaluate(() => {
           for (const s of ['.jw-display-icon-container','.jw-icon-display','[aria-label="Play"]','video','#player']) {
             const el = document.querySelector(s); if (el) { el.click(); return s; }
           }
-          return 'none';
-        }); })
-        .then(clicked => { console.log(`[openStream] clicked: ${clicked}`); return p.mouse.click(640, 360); })
-        .then(() => new Promise(r => setTimeout(r, 8000)))
-        .then(() => { console.log(`[openStream] still no m3u8 after click+wait`); })
-        .catch(e => console.error(`[openStream] error: ${e.message}`));
+        }).catch(() => {}))
+        .then(() => p.mouse.click(640, 360).catch(() => {}))
+        .catch(e => console.error(`[goto error] ${e.message}`));
     });
 
     return result;
   } finally {
-    // Always close the page — we only need the URL + headers, not the page itself
     await p.close().catch(() => {});
   }
 }
