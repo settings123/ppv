@@ -82,50 +82,61 @@ function fetchRaw(url) {
 }
 
 function extractSlugsFromText(text, slugs) {
+  // Legacy: match nba/date/slug pattern in URLs
   for (const m of text.matchAll(/nba\/\d{4}-\d{2}-\d{2}\/[a-z0-9-]+/gi)) slugs.add(m[0]);
+}
+
+function extractSlugsFromApi(data, slugs) {
+  // New API format: { streams: [{ category: "NBA", streams: [{ slug: "nba/..." }] }] }
+  if (!data || !Array.isArray(data.streams)) return;
+  for (const cat of data.streams) {
+    if (!cat.category || !cat.category.toLowerCase().includes('nba')) continue;
+    if (!Array.isArray(cat.streams)) continue;
+    for (const s of cat.streams) {
+      if (s.slug) slugs.add(s.slug);
+      else if (s.name) {
+        // Try to extract from other fields
+        extractSlugsFromText(JSON.stringify(s), slugs);
+      }
+    }
+  }
+  // If no NBA category found, log all categories
+  const cats = data.streams.map(c => c.category).join(', ');
+  console.log(`API categories: ${cats}`);
 }
 
 async function getNBAGameSlugs() {
   const slugs = new Set();
 
-  // Working endpoints return 200 with full stream list
-  const candidates = [
-    'https://api.ppv.to/api/streams?sport=nba',
-    'https://api.ppv.to/api/streams?category=nba',
-    'https://api.ppv.to/api/streams',
-    'https://api.ppv.st/api/streams',
-  ];
+  try {
+    const { status, body } = await fetchRaw('https://api.ppv.to/api/streams');
+    console.log(`API status=${status} len=${body.length}`);
+    if (status === 200) {
+      const data = JSON.parse(body);
+      extractSlugsFromApi(data, slugs);
+      console.log(`Got ${slugs.size} NBA slugs from API`);
+    }
+  } catch(e) { console.log(`API error: ${e.message}`); }
 
-  for (const url of candidates) {
-    try {
-      const { status, body } = await fetchRaw(url);
-      console.log(`API ${url} status=${status} len=${body.length} preview=${body.slice(0,300)}`);
-      if (status === 200) {
-        extractSlugsFromText(body, slugs);
-        if (slugs.size) { console.log(`Got ${slugs.size} slugs from ${url}`); break; }
-      }
-    } catch(e) { console.log(`API ${url} error: ${e.message}`); }
-  }
-
-  // Always fallback to Puppeteer browser intercept — most reliable
+  // Fallback: Puppeteer loads ppv.to/live/nba and intercepts API response
   if (!slugs.size) {
     console.log('Falling back to Puppeteer intercept...');
     const p = await newPage();
-    const found = new Set();
     p.on('response', async r => {
       const u = r.url();
       if (!u.includes('api.ppv.to') && !u.includes('api.ppv.st')) return;
       try {
         const text = await r.text();
-        console.log(`Intercepted API: ${u} → ${text.slice(0,200)}`);
-        extractSlugsFromText(text, found);
+        try {
+          const data = JSON.parse(text);
+          extractSlugsFromApi(data, slugs);
+        } catch {}
+        extractSlugsFromText(text, slugs);
       } catch {}
     });
     try {
       await p.goto('https://ppv.to/live/nba', { waitUntil: 'networkidle2', timeout: 30000 });
       await new Promise(r => setTimeout(r, 5000));
-      found.forEach(s => slugs.add(s));
-      // Also scrape DOM links
       const links = await p.evaluate(() =>
         [...document.querySelectorAll('a[href]')].map(a => a.href).filter(h => h.includes('/live/nba/'))
       );
@@ -469,19 +480,18 @@ app.get('/stream/channel/:id.json', async (req, res) => {
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
 app.get('/debug', async (req, res) => {
-  const out = { sessions: [...sessions.keys()], time: new Date().toISOString(), tests: {} };
-  for (const url of [
-    'https://api.ppv.to/api/streams?sport=nba',
-    'https://api.ppv.to/api/streams',
-    'https://api.ppv.st/api/streams',
-  ]) {
-    try {
-      const { status, body } = await fetchRaw(url);
-      const slugs = new Set();
-      extractSlugsFromText(body, slugs);
-      out.tests[url] = { status, slugs: [...slugs], preview: body.slice(0, 400) };
-    } catch(e) { out.tests[url] = { error: e.message }; }
-  }
+  const out = { sessions: [...sessions.keys()], time: new Date().toISOString() };
+  try {
+    const { status, body } = await fetchRaw('https://api.ppv.to/api/streams');
+    const data = JSON.parse(body);
+    const slugs = new Set();
+    extractSlugsFromApi(data, slugs);
+    out.api = {
+      status,
+      categories: data.streams?.map(c => ({ category: c.category, count: c.streams?.length })),
+      nba_slugs: [...slugs],
+    };
+  } catch(e) { out.apiError = e.message; }
   res.json(out);
 });
 
