@@ -5,534 +5,782 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>StreamTV</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.7/hls.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;600;700;800&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0D0D12;
-    --bg2: #16161F;
-    --bg3: #1F1F2E;
-    --accent: #00D4FF;
-    --text: #F0F0FF;
-    --muted: #55556A;
-    --border: #2A2A3A;
-    --red: #FF6B6B;
-    --green: #00FF88;
-  }
+:root {
+  --bg:      #07090F;
+  --bg2:     #0D1018;
+  --bg3:     #131720;
+  --bg4:     #1A2030;
+  --accent:  #E8F400;
+  --accent2: #FF3D5A;
+  --text:    #E8EAF2;
+  --muted:   #505570;
+  --border:  #1C2135;
+  --live:    #FF3D5A;
+  --head:    'Barlow Condensed', sans-serif;
+  --body:    'Barlow', sans-serif;
+  --r:       10px;
+}
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; }
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    height: 100vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--body);
+  display: flex;
+  flex-direction: column;
+}
 
-  #topbar {
-    align-items: center;
-    background: #13131A;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    gap: 10px;
-    padding: 10px 16px;
-    flex-shrink: 0;
-  }
+/* ── Header ───────────────────────────────────────────── */
+#header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 40px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
 
-  #appName {
-    color: var(--accent);
-    font-size: 1.1rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    white-space: nowrap;
-  }
+#logo {
+  font-family: var(--head);
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-transform: uppercase;
+  line-height: 1;
+}
 
-  #urlInput {
-    flex: 1;
-    background: #1A1A28;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-size: 0.95rem;
-    padding: 8px 14px;
-    outline: none;
-  }
-  #urlInput:focus { border-color: var(--accent); }
+#logo span { color: var(--muted); font-weight: 300; }
 
-  .btn {
-    background: var(--accent);
-    border: none;
-    border-radius: 6px;
-    color: #000;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-weight: 700;
-    padding: 8px 18px;
-    white-space: nowrap;
-    transition: opacity 0.15s;
-  }
-  .btn:hover { opacity: 0.8; }
-  .btn:disabled { opacity: 0.35; cursor: default; }
-  .btn.secondary {
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    color: var(--text);
-  }
-  .btn.scan { background: var(--green); color: #000; }
+#crawlBtn {
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #000;
+  cursor: pointer;
+  font-family: var(--head);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 10px 28px;
+  text-transform: uppercase;
+  transition: opacity 0.15s, transform 0.1s;
+}
+#crawlBtn:hover { opacity: 0.85; transform: scale(1.02); }
+#crawlBtn:disabled { opacity: 0.35; cursor: default; transform: none; }
 
-  #currentUrl {
-    color: var(--muted);
-    font-size: 0.75rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 300px;
-  }
+#statusBar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
 
-  #main {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
+#statusText {
+  font-family: var(--head);
+  font-size: 0.9rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
 
-  #browserPanel {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    position: relative;
-  }
+#streamCounter {
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--accent);
+  font-family: var(--head);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 4px 14px;
+}
 
-  #screenshotWrap {
-    flex: 1;
-    overflow: hidden;
-    position: relative;
-    cursor: crosshair;
-    background: #000;
-  }
+#progressBar {
+  height: 2px;
+  background: var(--border);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+#progressFill {
+  position: absolute;
+  left: -100%;
+  top: 0;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: none;
+}
+#progressFill.running {
+  animation: scan 1.4s linear infinite;
+}
+@keyframes scan { to { left: 100%; } }
 
-  #screenshot {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: block;
-  }
+/* ── Grid ─────────────────────────────────────────────── */
+#gridWrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 40px 40px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg4) transparent;
+}
+#gridWrap::-webkit-scrollbar { width: 6px; }
+#gridWrap::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
 
-  #loadingOverlay {
-    align-items: center;
-    background: rgba(0,0,0,0.7);
-    display: none;
-    inset: 0;
-    justify-content: center;
-    position: absolute;
-  }
-  #loadingOverlay.active { display: flex; }
+#emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--muted);
+  text-align: center;
+}
+#emptyState .big {
+  font-family: var(--head);
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--bg4);
+}
+#emptyState p {
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
 
-  .spinner {
-    border: 3px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    width: 36px;
-    height: 36px;
-    animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
 
-  #browserControls {
-    background: #13131A;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 8px;
-    padding: 8px 12px;
-    align-items: center;
-  }
+/* ── Card ─────────────────────────────────────────────── */
+.card {
+  background: var(--bg2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  outline: none;
+  position: relative;
+  overflow: hidden;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.2s;
+}
+.card:hover, .card:focus {
+  background: var(--bg3);
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.card:hover::before, .card:focus::before { transform: scaleX(1); }
 
-  #status {
-    color: var(--muted);
-    font-size: 0.8rem;
-    flex: 1;
-  }
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
 
-  #resultsPanel {
-    background: var(--bg2);
-    border-left: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    width: 360px;
-    flex-shrink: 0;
-    overflow: hidden;
-  }
+.badge {
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  font-family: var(--head);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 2px;
+  text-transform: uppercase;
+}
+.badge.hls { border-color: rgba(232,244,0,0.3); }
+.badge.live { background: var(--live); border-color: var(--live); color: #fff; }
 
-  #resultsHeader {
-    border-bottom: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    padding: 12px 16px;
-    text-transform: uppercase;
-  }
+.card-title {
+  font-family: var(--head);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  color: var(--text);
+  flex: 1;
+}
 
-  #streamList {
-    flex: 1;
-    overflow-y: auto;
-    padding: 10px;
-  }
+.card-url {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  #streamList::-webkit-scrollbar { width: 4px; }
-  #streamList::-webkit-scrollbar-track { background: transparent; }
-  #streamList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.play-hint {
+  position: absolute;
+  bottom: 14px;
+  right: 16px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--accent);
+  font-family: var(--head);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.card:hover .play-hint, .card:focus .play-hint { opacity: 1; }
 
-  .stream-item {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    cursor: pointer;
-    margin-bottom: 8px;
-    padding: 12px 14px;
-    transition: border-color 0.15s, background 0.15s;
-  }
-  .stream-item:hover {
-    background: var(--bg3);
-    border-color: var(--accent);
-  }
+/* ── Player overlay ───────────────────────────────────── */
+#playerOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #000;
+  flex-direction: column;
+}
+#playerOverlay.active { display: flex; }
 
-  .stream-top {
-    align-items: center;
-    display: flex;
-    gap: 8px;
-    margin-bottom: 5px;
-  }
+#videoEl {
+  flex: 1;
+  width: 100%;
+  background: #000;
+  outline: none;
+}
 
-  .badge {
-    background: #001A22;
-    border: 1px solid var(--accent);
-    border-radius: 3px;
-    color: var(--accent);
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 1px 6px;
-    white-space: nowrap;
-  }
+/* Player controls bar */
+#playerBar {
+  flex-shrink: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.95));
+  padding: 14px 28px 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  transform: translateY(0);
+  transition: transform 0.3s, opacity 0.3s;
+}
+#playerBar.hidden { transform: translateY(100%); opacity: 0; }
 
-  .stream-label {
-    font-size: 0.9rem;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+#playerTitle {
+  flex: 1;
+  font-family: var(--head);
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  .stream-url {
-    color: var(--muted);
-    font-family: monospace;
-    font-size: 0.7rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+#playerInfo {
+  font-family: var(--head);
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
 
-  #emptyState {
-    color: var(--muted);
-    font-size: 0.85rem;
-    padding: 20px 16px;
-    text-align: center;
-    line-height: 1.6;
-  }
+/* Quality picker */
+#qualityWrap {
+  position: relative;
+}
 
-  #playerOverlay {
-    background: #000;
-    display: none;
-    inset: 0;
-    position: fixed;
-    z-index: 100;
-    flex-direction: column;
-  }
-  #playerOverlay.active { display: flex; }
+#qualityBtn {
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--head);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 8px 16px;
+  text-transform: uppercase;
+  transition: border-color 0.15s;
+}
+#qualityBtn:hover { border-color: var(--accent); color: var(--accent); }
 
-  #videoPlayer {
-    flex: 1;
-    width: 100%;
-    background: #000;
-  }
+#qualityMenu {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 140px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+#qualityMenu.open { display: block; }
 
-  #playerBar {
-    align-items: center;
-    background: rgba(0,0,0,0.85);
-    display: flex;
-    gap: 12px;
-    padding: 10px 16px;
-  }
+.quality-opt {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  font-family: var(--head);
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  transition: background 0.1s;
+  text-transform: uppercase;
+}
+.quality-opt:hover { background: var(--bg4); }
+.quality-opt.active { color: var(--accent); }
+.quality-opt .check { color: var(--accent); font-size: 0.8rem; }
 
-  #playerTitle {
-    flex: 1;
-    font-size: 0.9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+#closeBtn {
+  background: rgba(255,61,90,0.15);
+  border: 1px solid rgba(255,61,90,0.4);
+  border-radius: 6px;
+  color: var(--accent2);
+  cursor: pointer;
+  font-family: var(--head);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 8px 18px;
+  text-transform: uppercase;
+  transition: background 0.15s;
+}
+#closeBtn:hover { background: rgba(255,61,90,0.3); }
 
-  #playerStatus {
-    color: var(--muted);
-    font-size: 0.8rem;
-  }
+#playerError {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255,61,90,0.12);
+  border: 1px solid var(--accent2);
+  border-radius: 8px;
+  color: var(--accent2);
+  font-family: var(--head);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 18px 28px;
+  text-align: center;
+  text-transform: uppercase;
+}
 
-  #playerError {
-    color: var(--red);
-    font-size: 0.85rem;
-    padding: 12px 16px;
-    display: none;
-    background: rgba(255,107,107,0.1);
-  }
+/* ── Loading spinner ──────────────────────────────────── */
+.spinner-wrap {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7,9,15,0.7);
+  z-index: 10;
+}
+.spinner-wrap.active { display: flex; }
+.spinner {
+  width: 48px; height: 48px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Responsive ───────────────────────────────────────── */
+@media (max-width: 600px) {
+  #header { padding: 14px 20px; }
+  #gridWrap { padding: 20px; }
+  #grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+  #logo { font-size: 1.4rem; }
+}
 </style>
 </head>
 <body>
 
-<div id="topbar">
-  <span id="appName">STREAMTV</span>
-  <input id="urlInput" type="text" placeholder="Enter URL…" value="https://ppv.to" />
-  <button class="btn" id="btnGo">Go</button>
-  <button class="btn secondary" id="btnBack">← Back</button>
-  <button class="btn scan" id="btnScan">⬡ Scan</button>
-  <span id="currentUrl"></span>
+<!-- Header -->
+<div id="header">
+  <div id="logo">Stream<span>TV</span></div>
+  <div id="statusBar">
+    <span id="statusText">Ready</span>
+    <span id="streamCounter">0 streams</span>
+  </div>
+  <button id="crawlBtn">⬡ Scan NBA Games</button>
 </div>
 
-<div id="main">
-  <div id="browserPanel">
-    <div id="screenshotWrap">
-      <img id="screenshot" src="" alt="" />
-      <div id="loadingOverlay"><div class="spinner"></div></div>
-    </div>
-    <div id="browserControls">
-      <button class="btn secondary" id="btnScrollUp">↑ Scroll</button>
-      <button class="btn secondary" id="btnScrollDown">↓ Scroll</button>
-      <span id="status">Enter a URL to get started</span>
-    </div>
-  </div>
+<div id="progressBar"><div id="progressFill"></div></div>
 
-  <div id="resultsPanel">
-    <div id="resultsHeader">Stream Links (<span id="streamCount">0</span>)</div>
-    <div id="streamList">
-      <div id="emptyState">Navigate to a page with a video player, then click Scan.</div>
-    </div>
+<!-- Grid -->
+<div id="gridWrap">
+  <div id="emptyState">
+    <div class="big">No Streams</div>
+    <p>Press <strong>Scan NBA Games</strong> to find today's streams.</p>
   </div>
+  <div id="grid" style="display:none"></div>
 </div>
 
+<!-- Player -->
 <div id="playerOverlay">
-  <video id="videoPlayer" controls autoplay></video>
+  <video id="videoEl" controls autoplay playsinline></video>
+  <div class="spinner-wrap" id="playerSpinner"><div class="spinner"></div></div>
   <div id="playerError"></div>
   <div id="playerBar">
     <span id="playerTitle"></span>
-    <span id="playerStatus"></span>
-    <button class="btn secondary" id="btnClosePlayer">✕ Close</button>
+    <span id="playerInfo"></span>
+    <div id="qualityWrap">
+      <button id="qualityBtn">Quality</button>
+      <div id="qualityMenu"></div>
+    </div>
+    <button id="closeBtn">✕ Close</button>
   </div>
 </div>
 
 <script>
-  const urlInput       = document.getElementById('urlInput');
-  const btnGo          = document.getElementById('btnGo');
-  const btnBack        = document.getElementById('btnBack');
-  const btnScan        = document.getElementById('btnScan');
-  const btnScrollUp    = document.getElementById('btnScrollUp');
-  const btnScrollDown  = document.getElementById('btnScrollDown');
-  const screenshot     = document.getElementById('screenshot');
-  const loading        = document.getElementById('loadingOverlay');
-  const status         = document.getElementById('status');
-  const currentUrlEl   = document.getElementById('currentUrl');
-  const streamList     = document.getElementById('streamList');
-  const streamCount    = document.getElementById('streamCount');
-  const emptyState     = document.getElementById('emptyState');
-  const playerOverlay  = document.getElementById('playerOverlay');
-  const videoPlayer    = document.getElementById('videoPlayer');
-  const playerTitle    = document.getElementById('playerTitle');
-  const playerStatus   = document.getElementById('playerStatus');
-  const playerError    = document.getElementById('playerError');
-  const btnClosePlayer = document.getElementById('btnClosePlayer');
-  const screenshotWrap = document.getElementById('screenshotWrap');
+// ── State ──────────────────────────────────────────────────────────────────────
+const streams = [];
+let hlsInstance = null;
+let currentStream = null;
+let barTimeout = null;
+let barVisible = true;
 
-  let currentPageUrl = '';
-  let hlsInstance = null;
+// ── DOM refs ───────────────────────────────────────────────────────────────────
+const crawlBtn      = document.getElementById('crawlBtn');
+const statusText    = document.getElementById('statusText');
+const streamCounter = document.getElementById('streamCounter');
+const progressFill  = document.getElementById('progressFill');
+const emptyState    = document.getElementById('emptyState');
+const grid          = document.getElementById('grid');
 
-  function setLoading(on) {
-    loading.classList.toggle('active', on);
-    btnGo.disabled = on;
-    btnScan.disabled = on;
-  }
+const playerOverlay = document.getElementById('playerOverlay');
+const videoEl       = document.getElementById('videoEl');
+const playerSpinner = document.getElementById('playerSpinner');
+const playerTitle   = document.getElementById('playerTitle');
+const playerInfo    = document.getElementById('playerInfo');
+const playerError   = document.getElementById('playerError');
+const playerBar     = document.getElementById('playerBar');
+const qualityBtn    = document.getElementById('qualityBtn');
+const qualityMenu   = document.getElementById('qualityMenu');
+const closeBtn      = document.getElementById('closeBtn');
 
-  function updateView(data) {
-    if (data.screenshot) screenshot.src = 'data:image/jpeg;base64,' + data.screenshot;
-    if (data.currentUrl) {
-      currentPageUrl = data.currentUrl;
-      currentUrlEl.textContent = data.currentUrl;
-      urlInput.value = data.currentUrl;
+// ── Crawl ──────────────────────────────────────────────────────────────────────
+crawlBtn.addEventListener('click', startCrawl);
+
+async function startCrawl() {
+  crawlBtn.disabled = true;
+  progressFill.classList.add('running');
+  streams.length = 0;
+  grid.innerHTML = '';
+  grid.style.display = 'none';
+  emptyState.style.display = 'flex';
+  statusText.textContent = 'Connecting…';
+  streamCounter.textContent = '0 streams';
+
+  // Open SSE before triggering crawl
+  const es = new EventSource('/api/crawl-progress');
+
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'start') {
+      statusText.textContent = 'Starting…';
+
+    } else if (msg.type === 'status') {
+      statusText.textContent = msg.msg;
+
+    } else if (msg.type === 'visiting') {
+      const short = msg.url.replace('https://ppv.to/live/nba/', '');
+      statusText.textContent = `Checking: ${short}`;
+
+    } else if (msg.type === 'stream') {
+      addStream(msg.stream);
+
+    } else if (msg.type === 'no_stream') {
+      // game found but no stream yet — could show grayed card in future
+
+    } else if (msg.type === 'done') {
+      statusText.textContent = `Done — ${msg.total} stream${msg.total !== 1 ? 's' : ''} found`;
+      streamCounter.textContent = `${msg.total} stream${msg.total !== 1 ? 's' : ''}`;
+      progressFill.classList.remove('running');
+      crawlBtn.disabled = false;
+      crawlBtn.textContent = '↺ Refresh';
+      es.close();
+
+    } else if (msg.type === 'error') {
+      // silently skip
     }
-  }
+  };
 
-  async function post(endpoint, body) {
-    const r = await fetch(endpoint, {
+  es.onerror = () => {
+    es.close();
+    progressFill.classList.remove('running');
+    crawlBtn.disabled = false;
+  };
+
+  // Trigger crawl
+  await fetch('/api/crawl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  }).catch(() => {});
+}
+
+// ── Add stream card ────────────────────────────────────────────────────────────
+function addStream(s) {
+  if (streams.find(x => x.slug === s.slug)) return;
+  streams.push(s);
+
+  emptyState.style.display = 'none';
+  grid.style.display = 'grid';
+  streamCounter.textContent = `${streams.length} stream${streams.length !== 1 ? 's' : ''}`;
+
+  const idx = streams.length - 1;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.tabIndex = 0;
+  card.dataset.index = idx;
+  card.innerHTML = `
+    <div class="card-top">
+      <span class="badge hls live">● LIVE</span>
+      <span class="card-title">${esc(s.label)}</span>
+    </div>
+    <div class="card-url">${esc(s.slug)}</div>
+    <span class="play-hint">▶ Play</span>
+  `;
+
+  card.addEventListener('click', () => openAndPlay(idx));
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAndPlay(idx); }
+  });
+
+  grid.appendChild(card);
+}
+
+// ── Player ─────────────────────────────────────────────────────────────────────
+async function openAndPlay(idx) {
+  const s = streams[idx];
+  if (!s) return;
+  currentStream = s;
+
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  videoEl.pause();
+  videoEl.removeAttribute('src');
+  playerError.style.display = 'none';
+  qualityMenu.innerHTML = '';
+  qualityMenu.classList.remove('open');
+  qualityBtn.textContent = 'Quality';
+
+  playerTitle.textContent = s.label;
+  playerInfo.textContent = 'Opening stream…';
+  playerSpinner.classList.add('active');
+  playerOverlay.classList.add('active');
+  showBar();
+
+  try {
+    const resp = await fetch('/api/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ slug: s.slug })
     });
-    return r.json();
-  }
-
-  async function navigate() {
-    const url = urlInput.value.trim();
-    if (!url) return;
-    setLoading(true);
-    status.textContent = 'Loading…';
-    try {
-      const data = await post('/api/navigate', { url });
-      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
-      updateView(data);
-      status.textContent = 'Click the screenshot to interact with the page';
-    } catch (e) {
-      status.textContent = 'Failed to load page';
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  btnGo.addEventListener('click', navigate);
-  urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') navigate(); });
-
-  btnBack.addEventListener('click', async () => {
-    setLoading(true);
-    try { updateView(await post('/api/back', {})); }
-    finally { setLoading(false); }
-  });
-
-  btnScrollUp.addEventListener('click', async () => {
-    updateView(await post('/api/scroll', { direction: 'up' }));
-  });
-
-  btnScrollDown.addEventListener('click', async () => {
-    updateView(await post('/api/scroll', { direction: 'down' }));
-  });
-
-  screenshotWrap.addEventListener('click', async (e) => {
-    if (loading.classList.contains('active')) return;
-    const rect = screenshotWrap.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-    setLoading(true);
-    status.textContent = 'Clicking…';
-    try {
-      const data = await post('/api/click', { x, y });
-      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
-      updateView(data);
-      status.textContent = 'Click the screenshot to interact with the page';
-    } finally { setLoading(false); }
-  });
-
-  btnScan.addEventListener('click', async () => {
-    setLoading(true);
-    status.textContent = 'Scanning for streams…';
-    try {
-      const data = await fetch('/api/scan').then(r => r.json());
-      renderStreams(data.streams || []);
-      status.textContent = `Found ${(data.streams || []).length} stream(s)`;
-    } catch (e) {
-      status.textContent = 'Scan failed';
-    } finally { setLoading(false); }
-  });
-
-  function renderStreams(streams) {
-    streamCount.textContent = streams.length;
-    if (streams.length === 0) {
-      streamList.innerHTML = '';
-      streamList.appendChild(emptyState);
-      emptyState.textContent = 'No streams found. Navigate deeper and try again.';
+    const data = await resp.json();
+    if (!resp.ok || !data.proxyUrl) {
+      playerSpinner.classList.remove('active');
+      playerError.textContent = data.error || 'Could not open stream';
+      playerError.style.display = 'block';
       return;
     }
-    streamList.innerHTML = streams.map((s, i) => `
-      <div class="stream-item" data-index="${i}">
-        <div class="stream-top">
-          <span class="badge">${escHtml(s.type)}</span>
-          <span class="stream-label">${escHtml(s.label)}</span>
-        </div>
-        <div class="stream-url">${escHtml(s.url)}</div>
-      </div>
-    `).join('');
 
-    streamList.querySelectorAll('.stream-item').forEach(el => {
-      el.addEventListener('click', () => playStream(streams[parseInt(el.dataset.index)]));
-    });
-  }
-
-  function playStream(stream) {
-    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-
-    playerTitle.textContent = stream.label;
-    playerError.style.display = 'none';
-    playerStatus.textContent = 'Loading…';
-    playerOverlay.classList.add('active');
-
-    const isHLS = /\.m3u8/i.test(stream.url) || stream.type === 'HLS';
-
-    // Proxy the m3u8 through our server to bypass CORS
-    const proxyUrl = '/proxy?referer=' + encodeURIComponent(currentPageUrl) +
-                     '&url=' + encodeURIComponent(stream.url);
-
-    if (isHLS && Hls.isSupported()) {
-      hlsInstance = new Hls({
-        backBufferLength: 120,   // keep 2 min behind for rewinding
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        // Route every segment request through our proxy
-        xhrSetup: function(xhr, url) {
-          // Only proxy external URLs, not already-proxied ones
-          if (!url.startsWith('/proxy')) {
-            const proxied = '/proxy?referer=' + encodeURIComponent(stream.url) +
-                            '&url=' + encodeURIComponent(url);
-            xhr.open('GET', proxied, true);
-          }
-        }
-      });
-      hlsInstance.loadSource(proxyUrl);
-      hlsInstance.attachMedia(videoPlayer);
-      hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-        playerStatus.textContent = '';
-        videoPlayer.play();
-      });
-      hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-        if (data.fatal) {
-          playerError.style.display = 'block';
-          playerError.textContent = 'HLS error: ' + (data.details || data.type);
-        }
-      });
-    } else if (isHLS && videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari native HLS
-      videoPlayer.src = proxyUrl;
-      videoPlayer.play();
-      playerStatus.textContent = '';
-    } else {
-      // MP4, WebM
-      videoPlayer.src = proxyUrl;
-      videoPlayer.play().catch(err => {
-        playerError.style.display = 'block';
-        playerError.textContent = 'Playback error: ' + err.message;
-      });
-      playerStatus.textContent = '';
+    // Show VLC button with raw URL (IP-locked to server, open in VLC on same network)
+    if (data.rawUrl) {
+      playerInfo.textContent = 'Open in VLC for best quality';
+      showVlcButton(data.rawUrl, s.label);
     }
-  }
 
-  btnClosePlayer.addEventListener('click', () => {
-    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-    videoPlayer.pause();
-    videoPlayer.src = '';
-    playerError.style.display = 'none';
-    playerStatus.textContent = '';
-    playerOverlay.classList.remove('active');
+    playHLS(data.proxyUrl, s);
+  } catch (err) {
+    playerSpinner.classList.remove('active');
+    playerError.textContent = 'Error: ' + err.message;
+    playerError.style.display = 'block';
+  }
+}
+
+function showVlcButton(url, label) {
+  // Remove any existing VLC button
+  document.getElementById('vlcBtn')?.remove();
+  const btn = document.createElement('button');
+  btn.id = 'vlcBtn';
+  btn.className = 'btn secondary';
+  btn.style.cssText = 'background:#e8a000;color:#000;font-weight:700;';
+  btn.textContent = '📺 Open in VLC';
+  btn.onclick = () => {
+    // vlc:// protocol opens VLC on most platforms
+    // Also copy to clipboard as fallback
+    const vlcUrl = 'vlc://' + url;
+    window.open(vlcUrl, '_blank');
+    navigator.clipboard?.writeText(url).catch(() => {});
+  };
+  playerBar.insertBefore(btn, closeBtn);
+}
+
+function playHLS(proxyUrl, s) {
+  if (Hls.isSupported()) {
+    hlsInstance = new Hls({ startLevel: -1, capLevelToPlayerSize: false, backBufferLength: 90, maxBufferLength: 60 });
+    hlsInstance.loadSource(proxyUrl);
+    hlsInstance.attachMedia(videoEl);
+    hlsInstance.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      playerSpinner.classList.remove('active');
+      playerInfo.textContent = 'HLS';
+      buildQualityMenu(data.levels, hlsInstance.currentLevel);
+      videoEl.play().catch(() => {});
+    });
+    hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+      updateQualityMenu(data.level);
+      const lvl = hlsInstance.levels[data.level];
+      if (lvl && lvl.height) { playerInfo.textContent = lvl.height + 'p'; qualityBtn.textContent = lvl.height + 'p'; }
+    });
+    hlsInstance.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal) {
+        playerSpinner.classList.remove('active');
+        playerError.textContent = 'Stream error: ' + (data.details || data.type);
+        playerError.style.display = 'block';
+      }
+    });
+  } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+    videoEl.src = proxyUrl;
+    videoEl.play().catch(() => {});
+    playerSpinner.classList.remove('active');
+  }
+}
+
+// ── Quality menu ───────────────────────────────────────────────────────────────
+function buildQualityMenu(levels, currentLevel) {
+  qualityMenu.innerHTML = '';
+
+  // "Auto" option
+  const autoOpt = document.createElement('div');
+  autoOpt.className = 'quality-opt' + (currentLevel === -1 ? ' active' : '');
+  autoOpt.innerHTML = `<span class="check">${currentLevel === -1 ? '✓' : ' '}</span> Auto`;
+  autoOpt.addEventListener('click', () => {
+    hlsInstance.currentLevel = -1;
+    qualityMenu.classList.remove('open');
+  });
+  qualityMenu.appendChild(autoOpt);
+
+  // Per-level options, sorted highest first
+  const sorted = levels
+    .map((l, i) => ({ i, h: l.height || 0, w: l.width || 0, bw: l.bitrate || 0 }))
+    .sort((a, b) => b.h - a.h || b.bw - a.bw);
+
+  sorted.forEach(({ i, h, bw }) => {
+    const label = h ? `${h}p` : (bw ? `${Math.round(bw / 1000)}k` : `Level ${i}`);
+    const opt = document.createElement('div');
+    opt.className = 'quality-opt' + (i === currentLevel ? ' active' : '');
+    opt.innerHTML = `<span class="check">${i === currentLevel ? '✓' : ' '}</span> ${label}`;
+    opt.addEventListener('click', () => {
+      hlsInstance.currentLevel = i;
+      qualityMenu.classList.remove('open');
+    });
+    qualityMenu.appendChild(opt);
   });
 
-  function escHtml(str) {
-    return String(str)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  qualityBtn.textContent = currentLevel === -1 ? 'Auto' : (levels[currentLevel]?.height ? `${levels[currentLevel].height}p` : 'Quality');
+}
+
+function updateQualityMenu(newLevel) {
+  qualityMenu.querySelectorAll('.quality-opt').forEach((opt, i) => {
+    const isAuto = i === 0;
+    const matches = isAuto ? newLevel === -1 : (i - 1 === newLevel);
+    opt.classList.toggle('active', matches);
+    opt.querySelector('.check').textContent = matches ? '✓' : ' ';
+  });
+}
+
+qualityBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  qualityMenu.classList.toggle('open');
+});
+
+// ── Player bar auto-hide ───────────────────────────────────────────────────────
+function showBar() {
+  playerBar.classList.remove('hidden');
+  barVisible = true;
+  clearTimeout(barTimeout);
+  barTimeout = setTimeout(hideBar, 4000);
+}
+
+function hideBar() {
+  playerBar.classList.add('hidden');
+  barVisible = false;
+}
+
+playerOverlay.addEventListener('mousemove', showBar);
+playerOverlay.addEventListener('touchstart', showBar);
+playerOverlay.addEventListener('click', (e) => {
+  if (e.target === videoEl) {
+    if (barVisible) {
+      qualityMenu.classList.remove('open');
+    } else {
+      showBar();
+    }
   }
+});
+
+// ── Close player ───────────────────────────────────────────────────────────────
+closeBtn.addEventListener('click', closePlayer);
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (qualityMenu.classList.contains('open')) {
+      qualityMenu.classList.remove('open');
+    } else if (playerOverlay.classList.contains('active')) {
+      closePlayer();
+    }
+  }
+  if (playerOverlay.classList.contains('active')) {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') showBar();
+  }
+});
+
+function closePlayer() {
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  videoEl.pause();
+  videoEl.removeAttribute('src');
+  playerOverlay.classList.remove('active');
+  playerError.style.display = 'none';
+  qualityMenu.classList.remove('open');
+  clearTimeout(barTimeout);
+}
+
+// ── Utility ────────────────────────────────────────────────────────────────────
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 </script>
 </body>
 </html>
