@@ -1,8 +1,7 @@
-const express = require('express');
-const path    = require('path');
-const https   = require('https');
-const http    = require('http');
-const { PassThrough } = require('stream');
+const express  = require('express');
+const path     = require('path');
+const https    = require('https');
+const http     = require('http');
 
 const IS_CLOUD = !!(process.env.RENDER || process.env.KOYEB || process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME);
 let puppeteer, chromium;
@@ -69,152 +68,100 @@ function extractSlugsFromText(text, slugs) {
 
 async function getNBAGameSlugs() {
   const slugs = new Set();
-
-  // Strategy 1: direct API
   for (const url of ['https://api.ppv.to/api/streams/nba','https://api.ppv.st/api/streams/nba']) {
     try {
       const { status, body } = await fetchRaw(url);
-      console.log(`API ${url} → status=${status} len=${body.length} preview=${body.slice(0,120)}`);
+      console.log(`API ${url} status=${status} preview=${body.slice(0,100)}`);
       extractSlugsFromText(body, slugs);
-      if (slugs.size) { console.log(`Got ${slugs.size} slugs from API`); break; }
-    } catch(e) { console.log(`API ${url} error: ${e.message}`); }
+      if (slugs.size) break;
+    } catch(e) { console.log(`API error: ${e.message}`); }
   }
-
-  // Strategy 2: Puppeteer browser intercept
   if (!slugs.size) {
-    console.log('Falling back to Puppeteer intercept...');
     const p = await newPage();
     p.on('response', async r => {
-      const u = r.url();
-      if (!u.includes('api.ppv.to') && !u.includes('api.ppv.st')) return;
-      try {
-        const text = await r.text();
-        console.log(`Intercepted ${u} → ${text.slice(0,120)}`);
-        extractSlugsFromText(text, slugs);
-      } catch {}
+      if (!r.url().includes('api.ppv')) return;
+      try { extractSlugsFromText(await r.text(), slugs); } catch {}
     });
     try {
       await p.goto(ORIGIN, { waitUntil: 'networkidle2', timeout: 30000 });
       await new Promise(r => setTimeout(r, 4000));
       const links = await p.evaluate(() => [...document.querySelectorAll('a[href]')].map(a => a.href));
-      console.log(`DOM links: ${links.filter(l=>l.includes('ppv.to/live')).join(', ')}`);
       links.forEach(u => extractSlugsFromText(u, slugs));
     } finally { await p.close().catch(() => {}); }
   }
-
-  console.log(`Final slugs (${slugs.size}):`, [...slugs]);
+  console.log(`Slugs (${slugs.size}):`, [...slugs]);
   return [...slugs];
 }
 
 // ── Session store ─────────────────────────────────────────────────────────────
-// key: slug  value: { page, m3u8Url, segmentCache: Map<url, Buffer>, segmentQueue: PassThrough }
+// key: slug  value: { m3u8Url, reqHeaders }
+// We capture the exact request headers Chromium used for the m3u8 request via CDP,
+// then replay them server-side. Since Render's outbound IP matches Puppeteer's IP,
+// the token validates correctly.
 const sessions = new Map();
 
 async function openStream(slug) {
   const existing = sessions.get(slug);
-  if (existing) { await existing.page.close().catch(() => {}); sessions.delete(slug); }
+  if (existing) sessions.delete(slug);
 
   const embedUrl = `https://pooembed.eu/embed/${slug}`;
   const p = await newPage();
 
-  // Segment cache — intercept responses from the player at CDP level
-  // so we can serve them to VLC without re-fetching
-  const segmentCache = new Map();
-  const pendingSegments = new Map(); // url -> [resolve callbacks]
+  try {
+    const client = await p.createCDPSession();
+    await client.send('Network.enable');
+    await client.send('Target.setAutoAttach', {
+      autoAttach: true, waitForDebuggerOnStart: false, flatten: true
+    }).catch(() => {});
 
-  const client = await p.createCDPSession();
-  await client.send('Network.enable');
-  await client.send('Target.setAutoAttach', {
-    autoAttach: true, waitForDebuggerOnStart: false, flatten: true
-  }).catch(() => {});
+    const result = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 35000);
 
-  // Intercept response bodies for .ts segments
-  client.on('Network.responseReceived', async ({ requestId, response }) => {
-    const u = response.url;
-    if (/\.(ts|m4s|aac)(\?|$)/i.test(u)) {
-      try {
-        const { body, base64Encoded } = await client.send('Network.getResponseBody', { requestId });
-        const buf = base64Encoded ? Buffer.from(body, 'base64') : Buffer.from(body);
-        segmentCache.set(u, buf);
-        console.log(`[seg cached] ${u.slice(-40)} ${buf.length}b`);
-        // Resolve any pending requests for this segment
-        const cbs = pendingSegments.get(u);
-        if (cbs) { cbs.forEach(cb => cb(buf)); pendingSegments.delete(u); }
-      } catch {}
-    }
-  });
+      client.on('Network.requestWillBeSent', ({ request }) => {
+        const u = request.url;
+        if (/\.m3u8/i.test(u) && !u.includes('pooembed')) {
+          console.log(`[m3u8] ${u}`);
+          console.log(`[headers] ${JSON.stringify(request.headers)}`);
+          clearTimeout(timer);
+          resolve({ url: u, headers: request.headers });
+        }
+      });
 
-  // Wait for m3u8 URL
-  const m3u8Url = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(null), 30000);
-    client.on('Network.requestWillBeSent', ({ request }) => {
-      const u = request.url;
-      if (/\.m3u8/i.test(u) && !u.includes('pooembed')) {
-        clearTimeout(timer);
-        console.log(`[m3u8] ${u}`);
-        resolve(u);
-      }
+      p.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+        .then(() => new Promise(r => setTimeout(r, 6000)))
+        .then(() => p.evaluate(() => {
+          for (const s of ['.jw-display-icon-container','.jw-icon-display','[aria-label="Play"]','video','#player']) {
+            const el = document.querySelector(s); if (el) { el.click(); return; }
+          }
+        }).catch(() => {}))
+        .then(() => p.mouse.click(640, 360).catch(() => {}))
+        .catch(() => {});
     });
-  });
 
-  if (!m3u8Url) { await p.close().catch(() => {}); return null; }
-
-  // Trigger playback if not already started
-  await p.evaluate(() => {
-    for (const s of ['.jw-display-icon-container','.jw-icon-display','[aria-label="Play"]','video','#player']) {
-      const el = document.querySelector(s); if (el) { el.click(); return; }
-    }
-  }).catch(() => {});
-
-  sessions.set(slug, { page: p, m3u8Url, segmentCache, pendingSegments, client });
-  return m3u8Url;
-}
-
-// Fetch a URL through the embed page — for m3u8 playlists (text)
-async function fetchTextThroughPage(slug, url) {
-  const s = sessions.get(slug);
-  if (!s || s.page.isClosed()) throw new Error('No session');
-  return s.page.evaluate(async (u) => {
-    const r = await fetch(u, { credentials: 'include' });
-    return { status: r.status, text: await r.text() };
-  }, url);
-}
-
-// Get a segment — either from cache (already fetched by the player) or fetch fresh
-async function getSegment(slug, url, timeoutMs = 15000) {
-  const s = sessions.get(slug);
-  if (!s || s.page.isClosed()) throw new Error('No session');
-
-  // Check cache first
-  if (s.segmentCache.has(url)) {
-    const buf = s.segmentCache.get(url);
-    s.segmentCache.delete(url); // free memory after use
-    return buf;
+    return result;
+  } finally {
+    // Always close the page — we only need the URL + headers, not the page itself
+    await p.close().catch(() => {});
   }
+}
 
-  // Wait for the player to fetch it, or fetch ourselves via page
+// Fetch a CDN URL server-side using the captured Chromium request headers
+function cdnGet(url, headers) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(async () => {
-      // Timeout — fetch it ourselves through the page
-      try {
-        const result = await s.page.evaluate(async (u) => {
-          const r = await fetch(u, { credentials: 'include' });
-          if (!r.ok) return null;
-          const ab = await r.arrayBuffer();
-          const bytes = new Uint8Array(ab);
-          let bin = '';
-          for (let i = 0; i < bytes.length; i += 8192)
-            bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
-          return btoa(bin);
-        }, url);
-        if (result) resolve(Buffer.from(result, 'base64'));
-        else reject(new Error('segment fetch failed'));
-      } catch(e) { reject(e); }
-    }, timeoutMs);
-
-    // Register as pending
-    if (!s.pendingSegments.has(url)) s.pendingSegments.set(url, []);
-    s.pendingSegments.get(url).push(buf => { clearTimeout(timer); resolve(buf); });
+    const mod = url.startsWith('https') ? https : http;
+    // Use the exact headers Chromium sent, override UA just in case
+    const reqHeaders = { ...headers, 'User-Agent': UA };
+    mod.get(url, { headers: reqHeaders }, r => {
+      // Follow redirects
+      if ([301,302,307,308].includes(r.statusCode) && r.headers.location) {
+        const next = r.headers.location.startsWith('http') ? r.headers.location : new URL(r.headers.location, url).href;
+        r.resume();
+        return cdnGet(next, headers).then(resolve).catch(reject);
+      }
+      const chunks = [];
+      r.on('data', d => chunks.push(d));
+      r.on('end', () => resolve({ status: r.statusCode, headers: r.headers, body: Buffer.concat(chunks) }));
+    }).on('error', reject);
   });
 }
 
@@ -254,42 +201,47 @@ app.post('/api/crawl', async (req, res) => {
   } finally { crawlRunning = false; }
 });
 
-// ── Play — open embed, return stream URLs ─────────────────────────────────────
+// ── Play ──────────────────────────────────────────────────────────────────────
 app.post('/api/play', async (req, res) => {
   const { slug } = req.body;
   if (!slug) return res.status(400).json({ error: 'slug required' });
   try {
     console.log(`[play] ${slug}`);
-    const m3u8Url = await openStream(slug);
-    if (!m3u8Url) return res.status(504).json({ error: 'Stream not found — try again' });
+    const result = await openStream(slug);
+    if (!result) return res.status(504).json({ error: 'Stream not found — try again' });
+    sessions.set(slug, { m3u8Url: result.url, reqHeaders: result.headers });
     const safeSlug = encodeURIComponent(slug);
-    // m3u8 served through our relay, segments too
     const relayUrl = `/relay/m3u8?slug=${safeSlug}`;
-    res.json({ ok: true, proxyUrl: relayUrl, rawUrl: m3u8Url });
+    res.json({ ok: true, proxyUrl: relayUrl, rawUrl: result.url });
   } catch (err) {
     console.error('[play] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Relay — serves m3u8 and segments through the live Puppeteer page ──────────
-app.get('/relay/m3u8', async (req, res) => {
-  const slug = req.query.slug;
-  if (!slug) return res.status(400).send('missing slug');
+// ── Relay ─────────────────────────────────────────────────────────────────────
+// Fetches m3u8 and segments server-side using Chromium's captured request headers.
+// Render server IP == Puppeteer IP == valid token IP. No page kept open.
 
+app.get('/relay/m3u8', async (req, res) => {
+  const slug = decodeURIComponent(req.query.slug || '');
+  if (!slug) return res.status(400).send('missing slug');
   const session = sessions.get(slug);
-  if (!session) return res.status(404).send('No session — call /api/play first');
+  if (!session) return res.status(404).send('No session — click a game first');
 
   try {
-    const result = await fetchTextThroughPage(slug, session.m3u8Url);
-    console.log(`[relay m3u8] status=${result.status} len=${result.text.length} preview=${result.text.slice(0,80).replace(/\n/g,' ')}`);
+    const { status, body } = await cdnGet(session.m3u8Url, session.reqHeaders);
+    const text = body.toString('utf8');
+    console.log(`[relay m3u8] status=${status} len=${text.length} preview=${text.slice(0,100).replace(/\n/g,' ')}`);
 
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
 
+    if (status !== 200) return res.status(status).send(text);
+
     const base = session.m3u8Url.substring(0, session.m3u8Url.lastIndexOf('/') + 1);
     const safeSlug = encodeURIComponent(slug);
-    const out = result.text.split('\n').map(line => {
+    const out = text.split('\n').map(line => {
       const t = line.trim();
       if (!t || t.startsWith('#')) return line;
       if (t.startsWith('/relay')) return line;
@@ -304,90 +256,126 @@ app.get('/relay/m3u8', async (req, res) => {
 });
 
 app.get('/relay/seg', async (req, res) => {
-  const slug   = req.query.slug;
-  const cdnUrl = req.query.cdn;
+  const slug   = decodeURIComponent(req.query.slug || '');
+  const cdnUrl = decodeURIComponent(req.query.cdn  || '');
   if (!slug || !cdnUrl) return res.status(400).send('missing params');
+
+  const session = sessions.get(slug);
+  if (!session) return res.status(404).send('No session');
 
   res.setHeader('Access-Control-Allow-Origin', '*');
 
-  const isM3U8 = /\.m3u8/i.test(cdnUrl) || /playlist|manifest/i.test(cdnUrl);
+  const isM3U8 = /\.m3u8/i.test(cdnUrl);
 
-  if (isM3U8) {
-    // Sub-playlist (e.g. tracks-v1a1/mono.ts.m3u8)
-    try {
-      const result = await fetchTextThroughPage(slug, cdnUrl);
+  try {
+    const { status, body } = await cdnGet(cdnUrl, session.reqHeaders);
+    const text = body.toString('utf8');
+
+    if (isM3U8) {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       const base = cdnUrl.substring(0, cdnUrl.lastIndexOf('/') + 1);
       const safeSlug = encodeURIComponent(slug);
-      const out = result.text.split('\n').map(line => {
+      const out = text.split('\n').map(line => {
         const t = line.trim();
         if (!t || t.startsWith('#')) return line;
         if (t.startsWith('/relay')) return line;
         const abs = t.startsWith('http') ? t : base + t;
         return `/relay/seg?slug=${safeSlug}&cdn=${encodeURIComponent(abs)}`;
       }).join('\n');
-      res.end(out);
-    } catch(err) { res.status(500).send(err.message); }
-    return;
-  }
+      return res.end(out);
+    }
 
-  // Binary segment
-  try {
-    const buf = await getSegment(slug, cdnUrl);
-    console.log(`[relay seg] ${cdnUrl.slice(-40)} ${buf.length}b`);
+    console.log(`[relay seg] status=${status} len=${body.length}`);
     res.setHeader('Content-Type', 'video/mp2t');
-    res.end(buf);
+    res.end(body);
   } catch (err) {
     console.error('[relay seg] error:', err.message);
     res.status(500).send(err.message);
   }
 });
 
+// ── Stremio addon ─────────────────────────────────────────────────────────────
+app.get('/manifest.json', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({
+    id:          'com.streamtv.nba',
+    version:     '1.0.0',
+    name:        'StreamTV NBA',
+    description: 'Live NBA streams from ppv.to',
+    types:       ['tv'],
+    catalogs:    [{ type: 'tv', id: 'nba_live', name: 'NBA Live', extra: [] }],
+    resources:   ['catalog', 'stream'],
+    idPrefixes:  ['nba_'],
+  });
+});
 
-// ── Debug — hit from any browser to diagnose without the TV ──────────────────
-app.get('/debug', async (req, res) => {
-  const out = { time: new Date().toISOString(), tests: {} };
-
-  // Test 1: direct API call
-  for (const url of ['https://api.ppv.to/api/streams/nba','https://api.ppv.st/api/streams/nba']) {
-    try {
-      const data = await fetchJson(url);
-      const text = JSON.stringify(data||'');
-      const slugs = new Set();
-      extractSlugsFromText(text, slugs);
-      out.tests[url] = { ok: !!data, slugCount: slugs.size, slugs: [...slugs], preview: text.slice(0,200) };
-      if (slugs.size) break;
-    } catch(e) { out.tests[url] = { error: e.message }; }
+app.get('/catalog/tv/nba_live.json', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try {
+    const slugs = await getNBAGameSlugs();
+    const metas = slugs.map(slug => ({
+      id:          'nba_' + slug.replace(/\//g, '_'),
+      type:        'tv',
+      name:        labelFromSlug(slug),
+      poster:      'https://ppv.to/assets/img/ppv_to.png',
+      background:  'https://ppv.to/assets/img/ppv_to.png',
+      description: `Live NBA: ${labelFromSlug(slug)}`,
+    }));
+    res.json({ metas });
+  } catch(e) {
+    res.json({ metas: [] });
   }
+});
 
-  // Test 2: active sessions
-  out.activeSessions = [...sessions.keys()];
+app.get('/stream/tv/:id.json', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const id   = req.params.id; // nba_nba_2026-03-15_min-okc
+  const slug = id.replace(/^nba_/, '').replace(/_/g, '/').replace(/\/(\d{2})\/(\d{2})\//, '/$1-$2/').replace('nba/', 'nba/');
 
+  // Reconstruct slug: nba_2026-03-15_min-okc -> nba/2026-03-15/min-okc
+  const parts = id.replace(/^nba_/, '').split('_');
+  // parts: ['nba', '2026-03-15', 'min-okc']
+  const realSlug = parts.join('/');
+
+  try {
+    console.log(`[stremio stream] id=${id} slug=${realSlug}`);
+    const result = await openStream(realSlug);
+    if (!result) return res.json({ streams: [] });
+    sessions.set(realSlug, { m3u8Url: result.url, reqHeaders: result.headers });
+    const safeSlug = encodeURIComponent(realSlug);
+    const base = req.protocol + '://' + req.get('host');
+    res.json({
+      streams: [{
+        name:  'StreamTV',
+        title: labelFromSlug(realSlug),
+        url:   `${base}/relay/m3u8?slug=${safeSlug}`,
+      }]
+    });
+  } catch(e) {
+    console.error('[stremio stream] error:', e.message);
+    res.json({ streams: [] });
+  }
+});
+
+// ── Debug ─────────────────────────────────────────────────────────────────────
+app.get('/debug', async (req, res) => {
+  const out = { sessions: [...sessions.keys()], time: new Date().toISOString() };
+  try {
+    const { body } = await fetchRaw('https://api.ppv.to/api/streams/nba');
+    const slugs = new Set();
+    extractSlugsFromText(body, slugs);
+    out.api = { slugs: [...slugs], preview: body.slice(0, 200) };
+  } catch(e) { out.apiError = e.message; }
   res.json(out);
 });
 
-
-// ── /open-vlc — serves stream as video/mp4 MIME so Google TV prompts VLC ─────
-// Google TV browser will show "Open with" dialog when it receives video content
+// ── Playlist / open-vlc ───────────────────────────────────────────────────────
 app.get('/open-vlc', (req, res) => {
-  const url   = decodeURIComponent(req.query.url || '');
-  const title = req.query.title || 'Stream';
+  const url   = decodeURIComponent(req.query.url   || '');
+  const title = decodeURIComponent(req.query.title || 'Stream');
   if (!url) return res.status(400).send('missing url');
-
-  // Serve an M3U8 playlist pointing at the stream — video/mp4 triggers "Open with" on Google TV
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-  res.setHeader('Content-Disposition', `inline; filename="stream.m3u8"`);
-  // If it's already an m3u8 URL, redirect straight to it with the right headers
-  res.end(`#EXTM3U\n#EXTINF:-1 tvg-name="${title}",${title}\n${url}\n`);
-});
-
-// ── /playlist.m3u — plain m3u for manual VLC "open network" paste ────────────
-app.get('/playlist.m3u', (req, res) => {
-  const url   = decodeURIComponent(req.query.url || '');
-  const title = req.query.title || 'Stream';
-  if (!url) return res.status(400).send('missing url');
-  res.setHeader('Content-Type', 'audio/x-mpegurl');
-  res.setHeader('Content-Disposition', `attachment; filename="${title.replace(/[^a-z0-9]/gi,'_')}.m3u"`);
+  res.setHeader('Content-Disposition', 'inline; filename="stream.m3u8"');
   res.end(`#EXTM3U\n#EXTINF:-1,${title}\n${url}\n`);
 });
 
