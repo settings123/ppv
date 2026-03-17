@@ -753,6 +753,69 @@ app.get('/debug', async (req, res) => {
   res.json(out);
 });
 
+
+// ── Debug: inspect raw /fetch response ───────────────────────────────────────
+app.get('/debug/fetch/:slug(*)', async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    // Try multiple /fetch call patterns
+    const results = {};
+
+    // Pattern 1: POST with slug= body
+    const r1 = await rawFetch(`${EMBED}/fetch`, {
+      method: 'POST',
+      headers: {
+        'Referer':      `${EMBED}/embed/${slug}`,
+        'Origin':       EMBED,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept':       '*/*',
+      },
+      body: `slug=${encodeURIComponent(slug)}`,
+    });
+    results.post_slug = {
+      status: r1.status,
+      headers: r1.headers,
+      len: r1.buffer.length,
+      hex: r1.buffer.slice(0, 64).toString('hex'),
+      utf8: r1.buffer.slice(0, 200).toString('utf8'),
+      b64: r1.buffer.slice(0, 64).toString('base64'),
+    };
+
+    // Pattern 2: GET /fetch/{slug}
+    const r2 = await rawFetch(`${EMBED}/fetch/${encodeURIComponent(slug)}`, {
+      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED }
+    });
+    results.get_slug = {
+      status: r2.status,
+      len: r2.buffer.length,
+      hex: r2.buffer.slice(0, 64).toString('hex'),
+      utf8: r2.buffer.slice(0, 200).toString('utf8'),
+    };
+
+    // Pattern 3: POST with JSON body
+    const r3 = await rawFetch(`${EMBED}/fetch`, {
+      method: 'POST',
+      headers: {
+        'Referer':      `${EMBED}/embed/${slug}`,
+        'Origin':       EMBED,
+        'Content-Type': 'application/json',
+        'Accept':       '*/*',
+      },
+      body: JSON.stringify({ slug }),
+    });
+    results.post_json = {
+      status: r3.status,
+      len: r3.buffer.length,
+      hex: r3.buffer.slice(0, 64).toString('hex'),
+      utf8: r3.buffer.slice(0, 200).toString('utf8'),
+    };
+
+    res.json(results);
+  } catch(e) {
+    res.json({ error: e.message, stack: e.stack });
+  }
+});
+
 // ── Debug: test WASM extraction manually ──────────────────────────────────────
 app.get('/debug/wasm/:slug(*)', async (req, res) => {
   const slug = req.params.slug;
@@ -761,6 +824,24 @@ app.get('/debug/wasm/:slug(*)', async (req, res) => {
     res.json({ ok: true, m3u8Url });
   } catch(e) {
     res.json({ ok: false, error: e.message, stack: e.stack });
+  }
+});
+
+// Show raw embed page HTML for debugging
+app.get('/debug/embed/:slug(*)', async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    const r = await rawFetch(`${EMBED}/embed/${slug}`, {
+      headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html',
+                 'Accept-Language': 'en-US,en;q=0.9' }
+    });
+    res.json({
+      status: r.status,
+      headers: r.headers,
+      body: r.text(),
+    });
+  } catch(e) {
+    res.json({ error: e.message });
   }
 });
 
