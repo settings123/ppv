@@ -54,52 +54,45 @@ function rawFetch(url, opts = {}) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // ── NBA team data ─────────────────────────────────────────────────────────────
-// Maps ppv.to abbreviation → { full name, NBA team ID for CDN logos }
+// Maps ppv.to abbreviation → { full name, ESPN 3-letter code }
 const NBA_TEAMS = {
-  atl:  { name: 'Atlanta Hawks',          id: 1610612737 },
-  bos:  { name: 'Boston Celtics',         id: 1610612738 },
-  bkn:  { name: 'Brooklyn Nets',          id: 1610612751 },
-  cha:  { name: 'Charlotte Hornets',      id: 1610612766 },
-  chi:  { name: 'Chicago Bulls',          id: 1610612741 },
-  cle:  { name: 'Cleveland Cavaliers',    id: 1610612739 },
-  dal:  { name: 'Dallas Mavericks',       id: 1610612742 },
-  den:  { name: 'Denver Nuggets',         id: 1610612743 },
-  det:  { name: 'Detroit Pistons',        id: 1610612765 },
-  gs:   { name: 'Golden State Warriors',  id: 1610612744 },
-  hou:  { name: 'Houston Rockets',        id: 1610612745 },
-  ind:  { name: 'Indiana Pacers',         id: 1610612754 },
-  lac:  { name: 'LA Clippers',            id: 1610612746 },
-  lal:  { name: 'Los Angeles Lakers',     id: 1610612747 },
-  mem:  { name: 'Memphis Grizzlies',      id: 1610612763 },
-  mia:  { name: 'Miami Heat',             id: 1610612748 },
-  mil:  { name: 'Milwaukee Bucks',        id: 1610612749 },
-  min:  { name: 'Minnesota Timberwolves', id: 1610612750 },
-  no:   { name: 'New Orleans Pelicans',   id: 1610612740 },
-  ny:   { name: 'New York Knicks',        id: 1610612752 },
-  okc:  { name: 'Oklahoma City Thunder',  id: 1610612760 },
-  orl:  { name: 'Orlando Magic',          id: 1610612753 },
-  phi:  { name: 'Philadelphia 76ers',     id: 1610612755 },
-  phx:  { name: 'Phoenix Suns',           id: 1610612756 },
-  por:  { name: 'Portland Trail Blazers', id: 1610612757 },
-  sac:  { name: 'Sacramento Kings',       id: 1610612758 },
-  sa:   { name: 'San Antonio Spurs',      id: 1610612759 },
-  tor:  { name: 'Toronto Raptors',        id: 1610612761 },
-  utah: { name: 'Utah Jazz',              id: 1610612762 },
-  wsh:  { name: 'Washington Wizards',     id: 1610612764 },
+  atl:  { name: 'Atlanta Hawks',           espn: 'atl' },
+  bos:  { name: 'Boston Celtics',          espn: 'bos' },
+  bkn:  { name: 'Brooklyn Nets',           espn: 'bkn' },
+  cha:  { name: 'Charlotte Hornets',       espn: 'cha' },
+  chi:  { name: 'Chicago Bulls',           espn: 'chi' },
+  cle:  { name: 'Cleveland Cavaliers',     espn: 'cle' },
+  dal:  { name: 'Dallas Mavericks',        espn: 'dal' },
+  den:  { name: 'Denver Nuggets',          espn: 'den' },
+  det:  { name: 'Detroit Pistons',         espn: 'det' },
+  gs:   { name: 'Golden State Warriors',   espn: 'gsw' },
+  hou:  { name: 'Houston Rockets',         espn: 'hou' },
+  ind:  { name: 'Indiana Pacers',          espn: 'ind' },
+  lac:  { name: 'LA Clippers',             espn: 'lac' },
+  lal:  { name: 'Los Angeles Lakers',      espn: 'lal' },
+  mem:  { name: 'Memphis Grizzlies',       espn: 'mem' },
+  mia:  { name: 'Miami Heat',              espn: 'mia' },
+  mil:  { name: 'Milwaukee Bucks',         espn: 'mil' },
+  min:  { name: 'Minnesota Timberwolves',  espn: 'min' },
+  no:   { name: 'New Orleans Pelicans',    espn: 'nop' },
+  ny:   { name: 'New York Knicks',         espn: 'nyk' },
+  okc:  { name: 'Oklahoma City Thunder',   espn: 'okc' },
+  orl:  { name: 'Orlando Magic',           espn: 'orl' },
+  phi:  { name: 'Philadelphia 76ers',      espn: 'phi' },
+  phx:  { name: 'Phoenix Suns',            espn: 'phx' },
+  por:  { name: 'Portland Trail Blazers',  espn: 'por' },
+  sac:  { name: 'Sacramento Kings',        espn: 'sac' },
+  sa:   { name: 'San Antonio Spurs',       espn: 'sas' },
+  tor:  { name: 'Toronto Raptors',         espn: 'tor' },
+  utah: { name: 'Utah Jazz',               espn: 'uta' },
+  wsh:  { name: 'Washington Wizards',      espn: 'wsh' },
 };
 
-function teamLogoUrl(abbr, base) {
+// ESPN logos work publicly with no auth/referer restrictions
+function teamLogoUrl(abbr) {
   const team = NBA_TEAMS[abbr.toLowerCase()];
   if (!team) return null;
-  // Proxy through our server so Stremio can load it
-  if (base) return `${base}/logo/${abbr.toLowerCase()}`;
-  return `https://cdn.nba.com/logos/nba/${team.id}/global/L/logo.svg`;
-}
-
-function teamLogoCdnUrl(abbr) {
-  const team = NBA_TEAMS[abbr.toLowerCase()];
-  if (!team) return null;
-  return `https://cdn.nba.com/logos/nba/${team.id}/global/L/logo.svg`;
+  return `https://a.espncdn.com/combiner/i?img=/i/teamlogos/nba/500/${team.espn}.png&h=200&w=200`;
 }
 
 function teamName(abbr) {
@@ -443,26 +436,6 @@ function cdnGet(url) {
 }
 
 // ── Stremio addon ─────────────────────────────────────────────────────────────
-// ── Logo proxy ────────────────────────────────────────────────────────────────
-// Proxies NBA team SVG logos from cdn.nba.com so Stremio can load them.
-app.get('/logo/:abbr', async (req, res) => {
-  const abbr = req.params.abbr.toLowerCase();
-  const team = NBA_TEAMS[abbr];
-  const cdnUrl = team
-    ? `https://cdn.nba.com/logos/nba/${team.id}/global/L/logo.svg`
-    : 'https://cdn.nba.com/logos/leagues/logo-nba.svg';
-  try {
-    const r = await rawFetch(cdnUrl, {
-      headers: { 'Referer': 'https://www.nba.com/', 'Accept': 'image/svg+xml,image/*' }
-    });
-    res.setHeader('Content-Type', r.headers['content-type'] || 'image/svg+xml');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.end(r.buffer);
-  } catch(e) {
-    res.status(502).send('Logo fetch failed: ' + e.message);
-  }
-});
 
 // ── Matchup poster image ───────────────────────────────────────────────────────
 // Returns an SVG with both team logos side by side — Stremio renders this as
@@ -471,8 +444,8 @@ app.get('/poster/:slug(*)', async (req, res) => {
   const slug = req.params.slug;
   const { away, home } = parseMatchup(slug);
   const base = req.protocol + '://' + req.get('host');
-  const awayLogo = teamLogoUrl(away, base) || '';
-  const homeLogo = teamLogoUrl(home, base) || '';
+  const awayLogo = teamLogoUrl(away) || '';
+  const homeLogo = teamLogoUrl(home) || '';
   const awayName = teamName(away);
   const homeName = teamName(home);
 
@@ -553,7 +526,7 @@ app.get('/manifest.json', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.json({
     id:          'com.streamtv.nba',
-    version:     '2.1.0',
+    version:     '2.2.0',
     name:        'StreamTV NBA',
     description: 'Live NBA streams via ppv.to (no browser required)',
     types:       ['channel'],
@@ -585,8 +558,8 @@ app.get('/catalog/channel/nba_live.json', async (req, res) => {
         description: teamName(away) + ' @ ' + teamName(home),
         poster:      posterUrl(base, slug),
         posterShape: 'poster',
-        background:  teamLogoUrl(home, base) || posterUrl(base, slug),
-        logo:        teamLogoUrl(away, base) || `${base}/logo/nba`,
+        background:  teamLogoUrl(home) || posterUrl(base, slug),
+        logo:        teamLogoUrl(away) || `${base}/logo/nba`,
       };
     });
     console.log('[catalog] returning', metas.length, 'games');
@@ -611,8 +584,8 @@ app.get('/meta/channel/:id.json', (req, res) => {
       description: teamName(a2) + ' @ ' + teamName(h2),
       poster:      posterUrl(base2, slug),
       posterShape: 'poster',
-      background:  teamLogoUrl(h2, base2) || posterUrl(base2, slug),
-      logo:        teamLogoUrl(a2, base2) || `${base2}/logo/nba`,
+      background:  teamLogoUrl(h2) || posterUrl(base2, slug),
+      logo:        teamLogoUrl(a2) || `${base2}/logo/nba`,
     }
   });
 });
