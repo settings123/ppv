@@ -88,10 +88,17 @@ const NBA_TEAMS = {
   wsh:  { name: 'Washington Wizards',     id: 1610612764 },
 };
 
-function teamLogoUrl(abbr) {
+function teamLogoUrl(abbr, base) {
   const team = NBA_TEAMS[abbr.toLowerCase()];
   if (!team) return null;
-  // NBA CDN official logos
+  // Proxy through our server so Stremio can load it
+  if (base) return `${base}/logo/${abbr.toLowerCase()}`;
+  return `https://cdn.nba.com/logos/nba/${team.id}/global/L/logo.svg`;
+}
+
+function teamLogoCdnUrl(abbr) {
+  const team = NBA_TEAMS[abbr.toLowerCase()];
+  if (!team) return null;
   return `https://cdn.nba.com/logos/nba/${team.id}/global/L/logo.svg`;
 }
 
@@ -436,14 +443,36 @@ function cdnGet(url) {
 }
 
 // ── Stremio addon ─────────────────────────────────────────────────────────────
+// ── Logo proxy ────────────────────────────────────────────────────────────────
+// Proxies NBA team SVG logos from cdn.nba.com so Stremio can load them.
+app.get('/logo/:abbr', async (req, res) => {
+  const abbr = req.params.abbr.toLowerCase();
+  const team = NBA_TEAMS[abbr];
+  const cdnUrl = team
+    ? `https://cdn.nba.com/logos/nba/${team.id}/global/L/logo.svg`
+    : 'https://cdn.nba.com/logos/leagues/logo-nba.svg';
+  try {
+    const r = await rawFetch(cdnUrl, {
+      headers: { 'Referer': 'https://www.nba.com/', 'Accept': 'image/svg+xml,image/*' }
+    });
+    res.setHeader('Content-Type', r.headers['content-type'] || 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.end(r.buffer);
+  } catch(e) {
+    res.status(502).send('Logo fetch failed: ' + e.message);
+  }
+});
+
 // ── Matchup poster image ───────────────────────────────────────────────────────
 // Returns an SVG with both team logos side by side — Stremio renders this as
 // the card thumbnail. Size: 400×600 (portrait, Stremio poster ratio).
 app.get('/poster/:slug(*)', async (req, res) => {
   const slug = req.params.slug;
   const { away, home } = parseMatchup(slug);
-  const awayLogo = teamLogoUrl(away) || '';
-  const homeLogo = teamLogoUrl(home) || '';
+  const base = req.protocol + '://' + req.get('host');
+  const awayLogo = teamLogoUrl(away, base) || '';
+  const homeLogo = teamLogoUrl(home, base) || '';
   const awayName = teamName(away);
   const homeName = teamName(home);
 
@@ -484,13 +513,13 @@ app.get('/poster/:slug(*)', async (req, res) => {
 
   <!-- Away team logo -->
   ${awayLogo ? `<image href="${awayLogo}" x="20" y="100" width="160" height="160"
-        filter="url(#shadow)" preserveAspectRatio="xMidYMid meet"/>` :
+        filter="url(#shadow)" preserveAspectRatio="xMidYMid meet" crossorigin="anonymous"/>` :
     `<text x="100" y="195" font-family="Arial" font-size="48" font-weight="900"
         fill="#ffffff" text-anchor="middle" filter="url(#shadow)">${away.toUpperCase()}</text>`}
 
   <!-- Home team logo -->
   ${homeLogo ? `<image href="${homeLogo}" x="220" y="100" width="160" height="160"
-        filter="url(#shadow)" preserveAspectRatio="xMidYMid meet"/>` :
+        filter="url(#shadow)" preserveAspectRatio="xMidYMid meet" crossorigin="anonymous"/>` :
     `<text x="300" y="195" font-family="Arial" font-size="48" font-weight="900"
         fill="#ffffff" text-anchor="middle" filter="url(#shadow)">${home.toUpperCase()}</text>`}
 
@@ -524,7 +553,7 @@ app.get('/manifest.json', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.json({
     id:          'com.streamtv.nba',
-    version:     '2.0.0',
+    version:     '2.1.0',
     name:        'StreamTV NBA',
     description: 'Live NBA streams via ppv.to (no browser required)',
     types:       ['channel'],
@@ -556,8 +585,8 @@ app.get('/catalog/channel/nba_live.json', async (req, res) => {
         description: teamName(away) + ' @ ' + teamName(home),
         poster:      posterUrl(base, slug),
         posterShape: 'poster',
-        background:  teamLogoUrl(home) || posterUrl(base, slug),
-        logo:        teamLogoUrl(away) || 'https://cdn.nba.com/logos/leagues/logo-nba.svg',
+        background:  teamLogoUrl(home, base) || posterUrl(base, slug),
+        logo:        teamLogoUrl(away, base) || `${base}/logo/nba`,
       };
     });
     console.log('[catalog] returning', metas.length, 'games');
@@ -582,8 +611,8 @@ app.get('/meta/channel/:id.json', (req, res) => {
       description: teamName(a2) + ' @ ' + teamName(h2),
       poster:      posterUrl(base2, slug),
       posterShape: 'poster',
-      background:  teamLogoUrl(h2) || posterUrl(base2, slug),
-      logo:        teamLogoUrl(a2) || 'https://cdn.nba.com/logos/leagues/logo-nba.svg',
+      background:  teamLogoUrl(h2, base2) || posterUrl(base2, slug),
+      logo:        teamLogoUrl(a2, base2) || `${base2}/logo/nba`,
     }
   });
 });
