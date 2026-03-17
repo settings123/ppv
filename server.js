@@ -176,255 +176,65 @@ async function getNBAGameSlugs() {
   return [...slugs];
 }
 
-// ── WASM / gasm.js execution ───────────────────────────────────────────────────
+// ── Stream extraction via yt-dlp ──────────────────────────────────────────────
+const { spawn, execFile } = require('child_process');
 
-// Cache: we only need to fetch gasm.js and gasm.wasm once
-let _gasmWasm         = null;   // Buffer
-let _encryptedBlob    = null;   // base64 blob from embed page
-
-// Load gasm.js from disk (saved alongside server.js)
-const GASM_JS_PATH = path.join(__dirname, 'gasm.js');
-let _gasmJs = fs.existsSync(GASM_JS_PATH) ? fs.readFileSync(GASM_JS_PATH, 'utf8') : null;
-if (_gasmJs) console.log(`[gasm] loaded gasm.js from disk len=${_gasmJs.length}`);
-else console.warn('[gasm] WARNING: gasm.js not found on disk — stream extraction will fail');
-
-const WASM_CACHE = path.join(__dirname, '.wasm-cache');
-if (!fs.existsSync(WASM_CACHE)) fs.mkdirSync(WASM_CACHE, { recursive: true });
-
-// The encrypted blob key pattern in embed page HTML
-// window['ZpQw9XkLmN8c3vR3'] = 'A3BYEDFX...' — this IS the stream data
-const BLOB_KEY_RE = /window\['[A-Za-z0-9]{16,}'\]\s*=\s*'([A-Za-z0-9+/=]{20,})'/;
-
-async function loadGasmAssets(slug) {
-  // 1. Fetch embed page — extract encrypted blob directly from HTML
-  console.log(`[gasm] fetching embed page slug=${slug}`);
-  const embedR = await rawFetch(`${EMBED}/embed/${slug}`, {
-    headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html' }
+// ── yt-dlp auto-install ────────────────────────────────────────────────────────
+const YTDLP_BIN = path.join(__dirname, 'yt-dlp');
+async function ensureYtDlp() {
+  // Check if already available
+  if (fs.existsSync(YTDLP_BIN)) return YTDLP_BIN;
+  try { require('child_process').execSync('yt-dlp --version', {stdio:'ignore'}); return 'yt-dlp'; } catch {}
+  // Download binary
+  console.log('[ytdlp] downloading yt-dlp binary...');
+  const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+  await new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(YTDLP_BIN);
+    https.get(url, res => {
+      if ([301,302].includes(res.statusCode)) {
+        file.close();
+        https.get(res.headers.location, res2 => { res2.pipe(file); file.on('finish', resolve); }).on('error', reject);
+      } else { res.pipe(file); file.on('finish', resolve); }
+    }).on('error', reject);
   });
-  const html = embedR.text();
-  console.log(`[gasm] embed status=${embedR.status} len=${html.length}`);
-
-  const blobMatch = html.match(BLOB_KEY_RE);
-  if (blobMatch) {
-    console.log(`[gasm] found encrypted blob len=${blobMatch[1].length}`);
-    _encryptedBlob = blobMatch[1];
-  } else {
-    console.log('[gasm] no blob found, will try /fetch endpoint');
-    console.log('[gasm] HTML snippet:', html.slice(0, 500));
-  }
-
-  // 2. Fetch gasm.wasm (try known paths, cache to disk)
-  if (!_gasmWasm) {
-    const cachePath = path.join(WASM_CACHE, 'gasm.wasm');
-    if (fs.existsSync(cachePath)) {
-      _gasmWasm = fs.readFileSync(cachePath);
-      console.log(`[gasm] wasm from disk len=${_gasmWasm.length}`);
-    } else {
-      // Try known wasm paths on pooembed.eu
-      const wasmPaths = ['/gasm.wasm', '/js/gasm.wasm', '/assets/gasm.wasm', '/static/gasm.wasm'];
-      for (const wp of wasmPaths) {
-        const r = await rawFetch(`${EMBED}${wp}`, {
-          headers: { 'Referer': EMBED + '/', 'Accept': 'application/wasm' }
-        });
-        console.log(`[gasm] wasm try ${wp} -> ${r.status} len=${r.buffer.length}`);
-        if (r.status === 200 && r.buffer.length > 1000) {
-          _gasmWasm = r.buffer;
-          fs.writeFileSync(cachePath, _gasmWasm);
-          console.log(`[gasm] wasm cached from ${wp} len=${_gasmWasm.length}`);
-          break;
-        }
-      }
-      if (!_gasmWasm) throw new Error('Could not find gasm.wasm at any known path');
-    }
-  }
+  fs.chmodSync(YTDLP_BIN, '755');
+  console.log('[ytdlp] downloaded successfully');
+  return YTDLP_BIN;
 }
+let _ytdlpBin = null;
+ensureYtDlp().then(b => { _ytdlpBin = b; console.log(`[ytdlp] ready: ${b}`); }).catch(e => console.error('[ytdlp] install failed:', e.message));
 
-async function callFetchEndpoint(slug) {
-  // If we already extracted the blob from the embed page, use it directly
-  if (_encryptedBlob) {
-    console.log(`[/fetch] using blob from embed page len=${_encryptedBlob.length}`);
-    const buf = Buffer.from(_encryptedBlob, 'base64');
-    return { status: 200, headers: {}, buffer: buf, text: () => buf.toString('utf8') };
-  }
-  // Fallback: call /fetch endpoint directly
-  let r = await rawFetch(`${EMBED}/fetch`, {
-    method: 'POST',
-    headers: {
-      'Referer':      `${EMBED}/embed/${slug}`,
-      'Origin':       EMBED,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept':       '*/*',
-    },
-    body: `slug=${encodeURIComponent(slug)}`,
-  });
-  console.log(`[/fetch POST] status=${r.status} len=${r.buffer.length}`);
-  if (r.status !== 200) {
-    r = await rawFetch(`${EMBED}/fetch/${encodeURIComponent(slug)}`, {
-      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED }
-    });
-    console.log(`[/fetch GET] status=${r.status} len=${r.buffer.length}`);
-  }
-  return r;
-}
+// yt-dlp binary path — installed via build command or present in PATH
+const YTDLP = process.env.YTDLP_PATH || 'yt-dlp';
 
 async function extractM3U8ViaWasm(slug) {
-  if (!_gasmJs) throw new Error('gasm.js not found — upload gasm.js alongside server.js');
-  _encryptedBlob = null; // reset per slug
-  await loadGasmAssets(slug);
-
-  const fetchResp = await callFetchEndpoint(slug);
-
-  // Capture references for VM closure
-  const wasmBuf     = _gasmWasm;
-  const fetchBuf    = fetchResp.buffer;
-  const fetchStatus = fetchResp.status;
-
-  // Transform ES module to something we can run in vm.Script
-  // ES module syntax: export function X, export { X as Y }, export default X
-  let code = _gasmJs;
-  code = code.replace(/\bexport\s+(?:async\s+)?function\s+(\w+)/g, 'function $1');
-  code = code.replace(/\bexport\s*\{([^}]+)\}/g, (_, inner) => {
-    return inner.split(',').map(s => {
-      const parts = s.trim().split(/\s+as\s+/);
-      const from  = parts[0].trim();
-      const to    = (parts[1] || parts[0]).trim();
-      return `__exports.${to} = ${from};`;
-    }).join('\n');
+  const embedUrl = `${EMBED}/embed/${slug}`;
+  console.log(`[ytdlp] extracting ${embedUrl}`);
+  return new Promise((resolve, reject) => {
+    const bin = _ytdlpBin || 'yt-dlp';
+  const args = [
+      '--no-warnings',
+      '--no-playlist',
+      '-f', 'best',
+      '--get-url',
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      '--add-header', `Referer:https://ppv.to/`,
+      '--no-check-certificate',
+      embedUrl,
+    ];
+    let stdout = '';
+    let stderr = '';
+    const proc = spawn(bin, args, { timeout: 30000 });
+    proc.stdout.on('data', d => stdout += d.toString());
+    proc.stderr.on('data', d => stderr += d.toString());
+    proc.on('close', code => {
+      console.log(`[ytdlp] exit=${code} stdout=${stdout.trim().slice(0,200)} stderr=${stderr.trim().slice(0,200)}`);
+      const url = stdout.trim().split('\n').find(l => l.includes('.m3u8') || l.startsWith('http'));
+      if (url) resolve(url);
+      else reject(new Error(`yt-dlp failed (${code}): ${stderr.trim().slice(0,300)}`));
+    });
+    proc.on('error', e => reject(new Error(`yt-dlp spawn error: ${e.message}`)));
   });
-  code = code.replace(/\bexport\s+default\s+/g, '__exports.default = ');
-
-  // Wrap it
-  const wrapped = `(async function(__exports, __slug) {
-${code}
-// Collect named exports
-if (typeof init_wasm === 'function')    __exports.init_wasm    = init_wasm;
-if (typeof on_unmute === 'function')    __exports.on_unmute    = on_unmute;
-if (typeof set_stream === 'function')   __exports.set_stream   = set_stream;
-if (typeof set_stream_jw === 'function')__exports.set_stream_jw= set_stream_jw;
-if (typeof cmbgySU === 'function')      __exports.cmbgySU      = cmbgySU;
-if (typeof eM9qc_ === 'function')       __exports.eM9qc_       = eM9qc_;
-if (typeof bNIfFsf === 'function')      __exports.bNIfFsf      = bNIfFsf;
-return __exports;
-})`;
-
-  // Build a fetch polyfill for the VM
-  const vmFetch = async (url, opts = {}) => {
-    const urlStr = url?.toString?.() || String(url);
-    console.log(`[vm-fetch] ${opts.method || 'GET'} ${urlStr}`);
-
-    if (urlStr.includes('.wasm')) {
-      const ab = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
-      return {
-        ok: true, status: 200,
-        headers: { get: () => 'application/wasm' },
-        arrayBuffer: async () => ab,
-      };
-    }
-    if (urlStr.includes('/fetch')) {
-      const ab = fetchBuf.buffer.slice(fetchBuf.byteOffset, fetchBuf.byteOffset + fetchBuf.byteLength);
-      return {
-        ok: fetchStatus === 200,
-        status: fetchStatus,
-        headers: { get: () => 'application/octet-stream' },
-        arrayBuffer: async () => ab,
-        text: async () => fetchBuf.toString('utf8'),
-      };
-    }
-    // Real request for anything else
-    try {
-      const r = await rawFetch(urlStr, {
-        method:  opts.method || 'GET',
-        headers: opts.headers || {},
-        body:    opts.body   || null,
-      });
-      const buf = r.buffer;
-      const ab  = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-      return {
-        ok: r.status >= 200 && r.status < 300,
-        status: r.status,
-        headers: { get: k => r.headers[k?.toLowerCase?.()] },
-        arrayBuffer: async () => ab,
-        text:        async () => r.text(),
-        json:        async () => JSON.parse(r.text()),
-      };
-    } catch(e) {
-      console.error(`[vm-fetch error] ${urlStr}: ${e.message}`);
-      throw e;
-    }
-  };
-
-  const sandbox = {
-    globalThis: {}, global: {}, window: {}, self: {},
-    console,
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    Promise, Object, Array, String, Number, Boolean, Error,
-    Map, Set, WeakMap, WeakSet, Symbol,
-    Uint8Array, Uint32Array, Int32Array, Float32Array, Float64Array,
-    Uint8ClampedArray, Int8Array, Int16Array, Uint16Array,
-    ArrayBuffer, SharedArrayBuffer, DataView, Math, JSON,
-    TextDecoder: require('util').TextDecoder,
-    TextEncoder: require('util').TextEncoder,
-    WebAssembly,
-    fetch: vmFetch,
-    URL,
-    URLSearchParams,
-    __exports: {},
-    __slug: slug,
-  };
-  sandbox.globalThis = sandbox;
-  sandbox.global     = sandbox;
-  sandbox.window     = sandbox;
-  sandbox.self       = sandbox;
-  // make import.meta.url available as a global for the script
-  sandbox.importMeta = { url: _gasmJsUrl };
-
-  const ctx = vm.createContext(sandbox);
-
-  console.log(`[gasm] compiling & running vm script...`);
-  let mod;
-  try {
-    const script = new vm.Script(wrapped, { filename: 'gasm.js', timeout: 30000 });
-    const factory = script.runInContext(ctx);
-    mod = await factory(sandbox.__exports, slug);
-  } catch(e) {
-    console.error(`[gasm] vm error: ${e.stack || e.message}`);
-    throw e;
-  }
-
-  // The default export (cmbgySU) is the main async function
-  const mainFn = mod.default || mod.cmbgySU;
-  if (!mainFn) {
-    console.log('[gasm] exports:', Object.keys(mod));
-    throw new Error('No default/cmbgySU export in gasm.js');
-  }
-
-  console.log(`[gasm] calling main function with slug=${slug}`);
-  let result;
-  try {
-    result = await mainFn(slug);
-  } catch(e) {
-    console.error(`[gasm] main fn error: ${e.stack || e.message}`);
-    throw e;
-  }
-  console.log(`[gasm] result:`, result);
-
-  // Result could be a string URL or an object with url property
-  let m3u8Url = null;
-  if (typeof result === 'string' && result.includes('.m3u8')) {
-    m3u8Url = result;
-  } else if (result && typeof result === 'object') {
-    m3u8Url = result.url || result.src || result.file || result.stream;
-    if (!m3u8Url) {
-      // Scan values
-      for (const v of Object.values(result)) {
-        if (typeof v === 'string' && v.includes('.m3u8')) { m3u8Url = v; break; }
-      }
-    }
-  }
-
-  if (!m3u8Url) throw new Error(`No m3u8 URL in gasm result: ${JSON.stringify(result)}`);
-  console.log(`[gasm] m3u8=${m3u8Url}`);
-  return m3u8Url;
 }
 
 // ── Session store ─────────────────────────────────────────────────────────────
@@ -736,9 +546,7 @@ app.get('/debug', async (req, res) => {
   const out = {
     sessions:    [...sessions.keys()],
     time:        new Date().toISOString(),
-    gasmCached:  !!_gasmWasm,
-    gasmJsLoaded: !!_gasmJs,
-  };
+      };
   try {
     const { status, body } = await fetchRaw('https://api.ppv.to/api/streams');
     const data = JSON.parse(body);
