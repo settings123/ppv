@@ -176,24 +176,91 @@ async function getNBAGameSlugs() {
   return [...slugs];
 }
 
-// ── Stream extraction via yt-dlp-wrap ────────────────────────────────────────
-const YTDlpWrap = require('yt-dlp-wrap').default || require('yt-dlp-wrap');
+// ── Stream extraction ─────────────────────────────────────────────────────────
+
+// Cache wasm binary
+let _wasmBinary = null;
+const WASM_CACHE_PATH = path.join(__dirname, 'gasm.wasm');
+
+async function getWasmBinary() {
+  if (_wasmBinary) return _wasmBinary;
+  if (fs.existsSync(WASM_CACHE_PATH)) {
+    _wasmBinary = fs.readFileSync(WASM_CACHE_PATH);
+    console.log('[wasm] loaded from disk len=' + _wasmBinary.length);
+    return _wasmBinary;
+  }
+  // Try common paths on pooembed.eu
+  const paths = ['/gasm.wasm', '/js/gasm.wasm', '/assets/gasm.wasm',
+                 '/static/gasm.wasm', '/wasm/gasm.wasm', '/dist/gasm.wasm'];
+  for (const p of paths) {
+    const r = await rawFetch(EMBED + p, {
+      headers: { 'Referer': EMBED + '/', 'Accept': 'application/wasm,*/*' }
+    });
+    console.log('[wasm] try ' + p + ' -> ' + r.status + ' len=' + r.buffer.length);
+    if (r.status === 200 && r.buffer.length > 100) {
+      _wasmBinary = r.buffer;
+      fs.writeFileSync(WASM_CACHE_PATH, _wasmBinary);
+      console.log('[wasm] cached to disk');
+      return _wasmBinary;
+    }
+  }
+  throw new Error('gasm.wasm not found at any known path');
+}
 
 async function extractM3U8ViaWasm(slug) {
-  const embedUrl = `${EMBED}/embed/${slug}`;
-  console.log(`[ytdlp] extracting ${embedUrl}`);
-  const ytDlp = new YTDlpWrap();
-  const info = await ytDlp.getVideoInfo([
-    embedUrl,
-    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    '--add-header', 'Referer:https://ppv.to/',
-    '--no-check-certificate',
-  ]);
-  console.log('[ytdlp] formats:', (info.formats||[]).length, 'url:', info.url?.slice(0,80));
-  const url = info.url || info.manifest_url
-    || (info.formats && info.formats.slice().reverse().find(f => f.url)?.url);
-  if (!url) throw new Error('yt-dlp returned no stream URL');
-  return url;
+  console.log('[stream] extracting slug=' + slug);
+
+  // Step 1: fetch embed page, grab encrypted blob
+  const embedR = await rawFetch(`${EMBED}/embed/${slug}`, {
+    headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html',
+               'Cache-Control': 'no-cache' }
+  });
+  const html = embedR.text();
+  console.log('[stream] embed status=' + embedR.status + ' len=' + html.length);
+
+  // Extract the encrypted blob: window['RANDOMKEY']='BASE64DATA'
+  const blobMatch = html.match(/window\['[A-Za-z0-9]{8,}'\]\s*=\s*'([A-Za-z0-9+/=]{50,})'/);
+  if (!blobMatch) {
+    console.log('[stream] no blob found, html snippet:', html.slice(0,300));
+    throw new Error('Encrypted blob not found in embed page');
+  }
+  const encBlob = blobMatch[1];
+  console.log('[stream] blob len=' + encBlob.length);
+
+  // Step 2: get wasm binary
+  const wasmBin = await getWasmBinary();
+
+  // Step 3: run wasm in Node to decrypt blob
+  const wasmBuf = wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength);
+  const { instance } = await WebAssembly.instantiate(wasmBuf, {
+    env: {
+      memory: new WebAssembly.Memory({ initial: 256 }),
+      // stub any imports the wasm needs
+    },
+    // log any import namespaces
+  });
+  console.log('[wasm] exports:', Object.keys(instance.exports).join(', '));
+
+  // Most likely the wasm exports a decrypt function
+  // Try common export names
+  const decrypt = instance.exports.decrypt
+    || instance.exports.decryptStream
+    || instance.exports.process
+    || instance.exports.getUrl
+    || instance.exports.main;
+
+  if (decrypt) {
+    // Write blob to wasm memory and call decrypt
+    const mem = new Uint8Array(instance.exports.memory.buffer);
+    const blobBytes = Buffer.from(encBlob, 'base64');
+    mem.set(blobBytes, 0);
+    const result = decrypt(0, blobBytes.length);
+    const resultStr = Buffer.from(instance.exports.memory.buffer, result).toString('utf8').split('\0')[0];
+    console.log('[wasm] decrypt result:', resultStr.slice(0,200));
+    if (resultStr.includes('http')) return resultStr.trim();
+  }
+
+  throw new Error('WASM decryption failed — exports: ' + Object.keys(instance.exports).join(', '));
 }
 
 // ── Session store ─────────────────────────────────────────────────────────────
@@ -520,6 +587,51 @@ app.get('/debug', async (req, res) => {
   res.json(out);
 });
 
+
+
+// ── Debug: probe pooembed.eu for wasm ────────────────────────────────────────
+app.get('/debug/probe', async (req, res) => {
+  const results = {};
+  const slug = req.query.slug || 'nba/2026-03-17/dal-cle';
+
+  // Fetch embed page and extract ALL URLs referenced
+  const embedR = await rawFetch(`${EMBED}/embed/${slug}`, {
+    headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html' }
+  });
+  const html = embedR.text();
+  results.embedStatus = embedR.status;
+  results.htmlLen = html.length;
+
+  // Extract ALL src= and href= URLs
+  const srcs = [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)].map(m => m[1]);
+  // Extract all strings that look like paths
+  const paths = [...html.matchAll(/"(\/[a-z0-9/_.-]+\.[a-z0-9]+)"/g)].map(m => m[1]);
+  // Extract cdnDomain and cdnPath from the window config
+  const cdnDomain = (html.match(/"cdnDomain":"([^"]+)"/) || [])[1];
+  const cdnPaths = [...html.matchAll(/"cdnPath":"([^"]+)"/g)].map(m => m[1]);
+
+  results.srcs = srcs;
+  results.embeddedPaths = paths.slice(0, 20);
+  results.cdnDomain = cdnDomain;
+  results.cdnPaths = cdnPaths;
+
+  // Probe pooembed.eu directly for wasm files
+  const probePaths = [
+    '/gasm.wasm', '/js/gasm.wasm', '/assets/gasm.wasm',
+    '/static/gasm.wasm', '/wasm/gasm.wasm', '/dist/gasm.wasm',
+    '/gasm.js', '/js/gasm.js', '/assets/gasm.js',
+    '/player.js', '/js/player.js', '/embed.js',
+  ];
+  results.probes = {};
+  for (const p of probePaths) {
+    const r = await rawFetch(EMBED + p, {
+      headers: { 'Referer': EMBED + '/', 'Accept': '*/*' }
+    });
+    results.probes[p] = { status: r.status, len: r.buffer.length };
+  }
+
+  res.json(results);
+});
 
 // ── Debug: dump raw embed page blob ──────────────────────────────────────────
 app.get('/debug/blob/:slug(*)', async (req, res) => {
