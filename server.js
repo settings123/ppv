@@ -400,6 +400,11 @@ app.get('/debug/fetch/:slug(*)', async (req, res) => {
     { label: 'GET /fetch/raw',        method: 'GET',  url: `${EMBED}/fetch/${slug}` },
     { label: 'POST to /api/fetch',    method: 'POST', url: `${EMBED}/api/fetch`, ct: 'application/x-www-form-urlencoded', body: `slug=${slug}` },
     { label: 'POST to /stream',       method: 'POST', url: `${EMBED}/stream`, ct: 'application/x-www-form-urlencoded', body: `slug=${slug}` },
+    { label: 'GET /api/fetch?slug=',   method: 'GET',  url: `${EMBED}/api/fetch?slug=${encodeURIComponent(slug)}` },
+    { label: 'GET /api/fetch/raw',     method: 'GET',  url: `${EMBED}/api/fetch/${slug}` },
+    { label: 'POST json to /api/fetch',method: 'POST', url: `${EMBED}/api/fetch`, ct: 'application/json', body: JSON.stringify({slug}) },
+    { label: 'GET /stream?slug=',      method: 'GET',  url: `${EMBED}/stream?slug=${encodeURIComponent(slug)}` },
+    { label: 'GET /stream/raw',        method: 'GET',  url: `${EMBED}/stream/${slug}` },
   ];
   for (const a of attempts) {
     try {
