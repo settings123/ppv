@@ -1,18 +1,15 @@
 {
   "name": "streamtv-nba",
-  "version": "1.0.0",
-  "description": "Live NBA streams via Stremio",
+  "version": "2.0.0",
+  "description": "NBA live stream proxy + Stremio addon — no browser required",
   "main": "server.js",
-  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "buffer": "^6.0.3",
-    "express": "^4.18.2",
-    "node-fetch": "^3.3.2"
-  },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
   }
 }
