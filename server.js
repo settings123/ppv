@@ -176,65 +176,24 @@ async function getNBAGameSlugs() {
   return [...slugs];
 }
 
-// ── Stream extraction via yt-dlp ──────────────────────────────────────────────
-const { spawn, execFile } = require('child_process');
-
-// ── yt-dlp auto-install ────────────────────────────────────────────────────────
-const YTDLP_BIN = path.join(__dirname, 'yt-dlp');
-async function ensureYtDlp() {
-  // Check if already available
-  if (fs.existsSync(YTDLP_BIN)) return YTDLP_BIN;
-  try { require('child_process').execSync('yt-dlp --version', {stdio:'ignore'}); return 'yt-dlp'; } catch {}
-  // Download binary
-  console.log('[ytdlp] downloading yt-dlp binary...');
-  const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
-  await new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(YTDLP_BIN);
-    https.get(url, res => {
-      if ([301,302].includes(res.statusCode)) {
-        file.close();
-        https.get(res.headers.location, res2 => { res2.pipe(file); file.on('finish', resolve); }).on('error', reject);
-      } else { res.pipe(file); file.on('finish', resolve); }
-    }).on('error', reject);
-  });
-  fs.chmodSync(YTDLP_BIN, '755');
-  console.log('[ytdlp] downloaded successfully');
-  return YTDLP_BIN;
-}
-let _ytdlpBin = null;
-ensureYtDlp().then(b => { _ytdlpBin = b; console.log(`[ytdlp] ready: ${b}`); }).catch(e => console.error('[ytdlp] install failed:', e.message));
-
-// yt-dlp binary path — installed via build command or present in PATH
-const YTDLP = process.env.YTDLP_PATH || 'yt-dlp';
+// ── Stream extraction via yt-dlp-wrap ────────────────────────────────────────
+const YTDlpWrap = require('yt-dlp-wrap').default || require('yt-dlp-wrap');
 
 async function extractM3U8ViaWasm(slug) {
   const embedUrl = `${EMBED}/embed/${slug}`;
   console.log(`[ytdlp] extracting ${embedUrl}`);
-  return new Promise((resolve, reject) => {
-    const bin = _ytdlpBin || 'yt-dlp';
-  const args = [
-      '--no-warnings',
-      '--no-playlist',
-      '-f', 'best',
-      '--get-url',
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      '--add-header', `Referer:https://ppv.to/`,
-      '--no-check-certificate',
-      embedUrl,
-    ];
-    let stdout = '';
-    let stderr = '';
-    const proc = spawn(bin, args, { timeout: 30000 });
-    proc.stdout.on('data', d => stdout += d.toString());
-    proc.stderr.on('data', d => stderr += d.toString());
-    proc.on('close', code => {
-      console.log(`[ytdlp] exit=${code} stdout=${stdout.trim().slice(0,200)} stderr=${stderr.trim().slice(0,200)}`);
-      const url = stdout.trim().split('\n').find(l => l.includes('.m3u8') || l.startsWith('http'));
-      if (url) resolve(url);
-      else reject(new Error(`yt-dlp failed (${code}): ${stderr.trim().slice(0,300)}`));
-    });
-    proc.on('error', e => reject(new Error(`yt-dlp spawn error: ${e.message}`)));
-  });
+  const ytDlp = new YTDlpWrap();
+  const info = await ytDlp.getVideoInfo([
+    embedUrl,
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    '--add-header', 'Referer:https://ppv.to/',
+    '--no-check-certificate',
+  ]);
+  console.log('[ytdlp] formats:', (info.formats||[]).length, 'url:', info.url?.slice(0,80));
+  const url = info.url || info.manifest_url
+    || (info.formats && info.formats.slice().reverse().find(f => f.url)?.url);
+  if (!url) throw new Error('yt-dlp returned no stream URL');
+  return url;
 }
 
 // ── Session store ─────────────────────────────────────────────────────────────
