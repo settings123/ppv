@@ -196,16 +196,22 @@ async function loadGasmAssets(slug) {
     const html = r.text();
     console.log(`[gasm] embed status=${r.status} len=${html.length}`);
 
-    // Find gasm.js src
-    const m = html.match(/src=["']([^"']*gasm[^"']*\.js[^"']*)/i)
-           || html.match(/["']([^"']*gasm[^"']*\.js[^"']*)/i);
+    // Log the page so we can see what scripts are present
+    console.log('[gasm] embed HTML snippet:', html.slice(0, 2000));
+
+    // Find any JS script src - try gasm first, then any .js bundle
+    const m = html.match(/src=["']([^"']*gasm[^"']*\.js[^"'?#]*)/i)
+           || html.match(/src=["']([^"']*\.js[^"'?#]*)/i);
     if (!m) {
-      // Log page for debugging
-      console.log('[gasm] embed page snippet:', html.slice(0, 500));
-      throw new Error('gasm.js not found in embed page');
+      console.log('[gasm] NO script tags found in embed page');
+      throw new Error('No JS scripts found in embed page');
     }
     _gasmJsUrl = m[1].startsWith('http') ? m[1] : `${EMBED}${m[1]}`;
     console.log(`[gasm] js url: ${_gasmJsUrl}`);
+    
+    // Also log ALL script tags for debugging
+    const allScripts = [...html.matchAll(/src=["']([^"']+\.js[^"']*)/gi)].map(m=>m[1]);
+    console.log('[gasm] all script srcs:', allScripts);
   }
 
   // 2. Fetch gasm.js
