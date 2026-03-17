@@ -379,4 +379,27 @@ app.get('/debug/probe', async (req, res) => {
   res.json({ embedStatus: embed.status, htmlLen: html.length, blobs, probes });
 });
 
+
+app.get('/debug/fetch/:slug(*)', async (req, res) => {
+  const slug = req.params.slug;
+  const results = {};
+  // POST with slug= body
+  try {
+    const r = await rawFetch(`${EMBED}/fetch`, {
+      method: 'POST',
+      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `slug=${encodeURIComponent(slug)}`,
+    });
+    results.post = { status: r.status, len: r.buffer.length, hex: r.buffer.slice(0,64).toString('hex'), utf8: r.buffer.slice(0,300).toString('utf8'), b64: r.buffer.toString('base64') };
+  } catch(e) { results.post = { error: e.message }; }
+  // GET /fetch/slug
+  try {
+    const r = await rawFetch(`${EMBED}/fetch/${encodeURIComponent(slug)}`, {
+      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED }
+    });
+    results.get = { status: r.status, len: r.buffer.length, hex: r.buffer.slice(0,64).toString('hex'), utf8: r.buffer.slice(0,300).toString('utf8') };
+  } catch(e) { results.get = { error: e.message }; }
+  res.json(results);
+});
+
 app.listen(PORT, () => console.log(`StreamTV v4 on port ${PORT}`));
