@@ -179,76 +179,74 @@ async function getNBAGameSlugs() {
 // ── WASM / gasm.js execution ───────────────────────────────────────────────────
 
 // Cache: we only need to fetch gasm.js and gasm.wasm once
-let _gasmJs    = null;   // string
-let _gasmWasm  = null;   // Buffer
-let _gasmJsUrl = null;
+let _gasmWasm         = null;   // Buffer
+let _encryptedBlob    = null;   // base64 blob from embed page
+
+// Load gasm.js from disk (saved alongside server.js)
+const GASM_JS_PATH = path.join(__dirname, 'gasm.js');
+let _gasmJs = fs.existsSync(GASM_JS_PATH) ? fs.readFileSync(GASM_JS_PATH, 'utf8') : null;
+if (_gasmJs) console.log(`[gasm] loaded gasm.js from disk len=${_gasmJs.length}`);
+else console.warn('[gasm] WARNING: gasm.js not found on disk — stream extraction will fail');
 
 const WASM_CACHE = path.join(__dirname, '.wasm-cache');
 if (!fs.existsSync(WASM_CACHE)) fs.mkdirSync(WASM_CACHE, { recursive: true });
 
+// The encrypted blob key pattern in embed page HTML
+// window['ZpQw9XkLmN8c3vR3'] = 'A3BYEDFX...' — this IS the stream data
+const BLOB_KEY_RE = /window\['[A-Za-z0-9]{16,}'\]\s*=\s*'([A-Za-z0-9+/=]{20,})'/;
+
 async function loadGasmAssets(slug) {
-  // 1. Fetch embed page to discover gasm.js URL
-  if (!_gasmJsUrl) {
-    console.log(`[gasm] fetching embed page for slug=${slug}`);
-    const r = await rawFetch(`${EMBED}/embed/${slug}`, {
-      headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html' }
-    });
-    const html = r.text();
-    console.log(`[gasm] embed status=${r.status} len=${html.length}`);
+  // 1. Fetch embed page — extract encrypted blob directly from HTML
+  console.log(`[gasm] fetching embed page slug=${slug}`);
+  const embedR = await rawFetch(`${EMBED}/embed/${slug}`, {
+    headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html' }
+  });
+  const html = embedR.text();
+  console.log(`[gasm] embed status=${embedR.status} len=${html.length}`);
 
-    // Log the page so we can see what scripts are present
-    console.log('[gasm] embed HTML snippet:', html.slice(0, 2000));
-
-    // Find any JS script src - try gasm first, then any .js bundle
-    const m = html.match(/src=["']([^"']*gasm[^"']*\.js[^"'?#]*)/i)
-           || html.match(/src=["']([^"']*\.js[^"'?#]*)/i);
-    if (!m) {
-      console.log('[gasm] NO script tags found in embed page');
-      throw new Error('No JS scripts found in embed page');
-    }
-    _gasmJsUrl = m[1].startsWith('http') ? m[1] : `${EMBED}${m[1]}`;
-    console.log(`[gasm] js url: ${_gasmJsUrl}`);
-    
-    // Also log ALL script tags for debugging
-    const allScripts = [...html.matchAll(/src=["']([^"']+\.js[^"']*)/gi)].map(m=>m[1]);
-    console.log('[gasm] all script srcs:', allScripts);
+  const blobMatch = html.match(BLOB_KEY_RE);
+  if (blobMatch) {
+    console.log(`[gasm] found encrypted blob len=${blobMatch[1].length}`);
+    _encryptedBlob = blobMatch[1];
+  } else {
+    console.log('[gasm] no blob found, will try /fetch endpoint');
+    console.log('[gasm] HTML snippet:', html.slice(0, 500));
   }
 
-  // 2. Fetch gasm.js
-  if (!_gasmJs) {
-    const r = await rawFetch(_gasmJsUrl, {
-      headers: { 'Referer': EMBED + '/', 'Accept': 'application/javascript' }
-    });
-    _gasmJs = r.text();
-    console.log(`[gasm] js fetched len=${_gasmJs.length}`);
-  }
-
-  // 3. Find and fetch gasm.wasm (cached to disk)
+  // 2. Fetch gasm.wasm (try known paths, cache to disk)
   if (!_gasmWasm) {
     const cachePath = path.join(WASM_CACHE, 'gasm.wasm');
     if (fs.existsSync(cachePath)) {
       _gasmWasm = fs.readFileSync(cachePath);
       console.log(`[gasm] wasm from disk len=${_gasmWasm.length}`);
     } else {
-      // Find wasm URL in gasm.js
-      const wm = _gasmJs.match(/["']([^"']*\.wasm[^"'?]*)/);
-      if (!wm) throw new Error('.wasm URL not found in gasm.js');
-      const wasmUrl = wm[1].startsWith('http') ? wm[1] : `${EMBED}${wm[1]}`;
-      console.log(`[gasm] wasm url: ${wasmUrl}`);
-      const r = await rawFetch(wasmUrl, {
-        headers: { 'Referer': EMBED + '/', 'Accept': 'application/wasm' }
-      });
-      if (r.status !== 200) throw new Error(`gasm.wasm fetch failed ${r.status}`);
-      _gasmWasm = r.buffer;
-      fs.writeFileSync(cachePath, _gasmWasm);
-      console.log(`[gasm] wasm cached len=${_gasmWasm.length}`);
+      // Try known wasm paths on pooembed.eu
+      const wasmPaths = ['/gasm.wasm', '/js/gasm.wasm', '/assets/gasm.wasm', '/static/gasm.wasm'];
+      for (const wp of wasmPaths) {
+        const r = await rawFetch(`${EMBED}${wp}`, {
+          headers: { 'Referer': EMBED + '/', 'Accept': 'application/wasm' }
+        });
+        console.log(`[gasm] wasm try ${wp} -> ${r.status} len=${r.buffer.length}`);
+        if (r.status === 200 && r.buffer.length > 1000) {
+          _gasmWasm = r.buffer;
+          fs.writeFileSync(cachePath, _gasmWasm);
+          console.log(`[gasm] wasm cached from ${wp} len=${_gasmWasm.length}`);
+          break;
+        }
+      }
+      if (!_gasmWasm) throw new Error('Could not find gasm.wasm at any known path');
     }
   }
 }
 
 async function callFetchEndpoint(slug) {
-  // The embed page POSTs to /fetch or GETs /fetch/{slug}
-  // Try POST first
+  // If we already extracted the blob from the embed page, use it directly
+  if (_encryptedBlob) {
+    console.log(`[/fetch] using blob from embed page len=${_encryptedBlob.length}`);
+    const buf = Buffer.from(_encryptedBlob, 'base64');
+    return { status: 200, headers: {}, buffer: buf, text: () => buf.toString('utf8') };
+  }
+  // Fallback: call /fetch endpoint directly
   let r = await rawFetch(`${EMBED}/fetch`, {
     method: 'POST',
     headers: {
@@ -270,6 +268,8 @@ async function callFetchEndpoint(slug) {
 }
 
 async function extractM3U8ViaWasm(slug) {
+  if (!_gasmJs) throw new Error('gasm.js not found — upload gasm.js alongside server.js');
+  _encryptedBlob = null; // reset per slug
   await loadGasmAssets(slug);
 
   const fetchResp = await callFetchEndpoint(slug);
@@ -737,7 +737,7 @@ app.get('/debug', async (req, res) => {
     sessions:    [...sessions.keys()],
     time:        new Date().toISOString(),
     gasmCached:  !!_gasmWasm,
-    gasmJsUrl:   _gasmJsUrl,
+    gasmJsLoaded: !!_gasmJs,
   };
   try {
     const { status, body } = await fetchRaw('https://api.ppv.to/api/streams');
