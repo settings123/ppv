@@ -754,65 +754,30 @@ app.get('/debug', async (req, res) => {
 });
 
 
-// ── Debug: inspect raw /fetch response ───────────────────────────────────────
-app.get('/debug/fetch/:slug(*)', async (req, res) => {
+// ── Debug: dump raw embed page blob ──────────────────────────────────────────
+app.get('/debug/blob/:slug(*)', async (req, res) => {
   const slug = req.params.slug;
   try {
-    // Try multiple /fetch call patterns
-    const results = {};
-
-    // Pattern 1: POST with slug= body
-    const r1 = await rawFetch(`${EMBED}/fetch`, {
-      method: 'POST',
-      headers: {
-        'Referer':      `${EMBED}/embed/${slug}`,
-        'Origin':       EMBED,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept':       '*/*',
-      },
-      body: `slug=${encodeURIComponent(slug)}`,
+    const r = await rawFetch(`${EMBED}/embed/${slug}`, {
+      headers: { 'Referer': 'https://ppv.to/', 'Accept': 'text/html' }
     });
-    results.post_slug = {
-      status: r1.status,
-      headers: r1.headers,
-      len: r1.buffer.length,
-      hex: r1.buffer.slice(0, 64).toString('hex'),
-      utf8: r1.buffer.slice(0, 200).toString('utf8'),
-      b64: r1.buffer.slice(0, 64).toString('base64'),
-    };
-
-    // Pattern 2: GET /fetch/{slug}
-    const r2 = await rawFetch(`${EMBED}/fetch/${encodeURIComponent(slug)}`, {
-      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED }
+    const html = r.text();
+    // Extract ALL window[key]=value assignments
+    const blobs = {};
+    for (const m of html.matchAll(/window\['([^']+)'\]\s*=\s*'([^']{20,})'/g)) {
+      blobs[m[1]] = { len: m[2].length, value: m[2].slice(0, 200) };
+    }
+    // Also try to find any base64-looking data
+    const b64chunks = html.match(/[A-Za-z0-9+/]{100,}={0,2}/g) || [];
+    res.json({
+      status: r.status,
+      htmlLen: html.length,
+      blobs,
+      b64chunks: b64chunks.slice(0,3).map(c => ({ len: c.length, preview: c.slice(0,100) })),
+      htmlSnippet: html.slice(0, 1000),
     });
-    results.get_slug = {
-      status: r2.status,
-      len: r2.buffer.length,
-      hex: r2.buffer.slice(0, 64).toString('hex'),
-      utf8: r2.buffer.slice(0, 200).toString('utf8'),
-    };
-
-    // Pattern 3: POST with JSON body
-    const r3 = await rawFetch(`${EMBED}/fetch`, {
-      method: 'POST',
-      headers: {
-        'Referer':      `${EMBED}/embed/${slug}`,
-        'Origin':       EMBED,
-        'Content-Type': 'application/json',
-        'Accept':       '*/*',
-      },
-      body: JSON.stringify({ slug }),
-    });
-    results.post_json = {
-      status: r3.status,
-      len: r3.buffer.length,
-      hex: r3.buffer.slice(0, 64).toString('hex'),
-      utf8: r3.buffer.slice(0, 200).toString('utf8'),
-    };
-
-    res.json(results);
   } catch(e) {
-    res.json({ error: e.message, stack: e.stack });
+    res.json({ error: e.message });
   }
 });
 
