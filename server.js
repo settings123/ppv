@@ -383,22 +383,32 @@ app.get('/debug/probe', async (req, res) => {
 app.get('/debug/fetch/:slug(*)', async (req, res) => {
   const slug = req.params.slug;
   const results = {};
-  // POST with slug= body
-  try {
-    const r = await rawFetch(`${EMBED}/fetch`, {
-      method: 'POST',
-      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `slug=${encodeURIComponent(slug)}`,
-    });
-    results.post = { status: r.status, len: r.buffer.length, hex: r.buffer.slice(0,64).toString('hex'), utf8: r.buffer.slice(0,300).toString('utf8'), b64: r.buffer.toString('base64') };
-  } catch(e) { results.post = { error: e.message }; }
-  // GET /fetch/slug
-  try {
-    const r = await rawFetch(`${EMBED}/fetch/${encodeURIComponent(slug)}`, {
-      headers: { 'Referer': `${EMBED}/embed/${slug}`, 'Origin': EMBED }
-    });
-    results.get = { status: r.status, len: r.buffer.length, hex: r.buffer.slice(0,64).toString('hex'), utf8: r.buffer.slice(0,300).toString('utf8') };
-  } catch(e) { results.get = { error: e.message }; }
+  const headers = {
+    'Referer': `${EMBED}/embed/${slug}`,
+    'Origin': EMBED,
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache',
+  };
+  // Try all variations
+  const attempts = [
+    { label: 'POST form slug=raw',    method: 'POST', url: `${EMBED}/fetch`, ct: 'application/x-www-form-urlencoded', body: `slug=${slug}` },
+    { label: 'POST form slug=enc',    method: 'POST', url: `${EMBED}/fetch`, ct: 'application/x-www-form-urlencoded', body: `slug=${encodeURIComponent(slug)}` },
+    { label: 'POST json',             method: 'POST', url: `${EMBED}/fetch`, ct: 'application/json', body: JSON.stringify({slug}) },
+    { label: 'POST raw slug as body', method: 'POST', url: `${EMBED}/fetch`, ct: 'text/plain', body: slug },
+    { label: 'GET /fetch?slug=',      method: 'GET',  url: `${EMBED}/fetch?slug=${encodeURIComponent(slug)}` },
+    { label: 'GET /fetch/raw',        method: 'GET',  url: `${EMBED}/fetch/${slug}` },
+    { label: 'POST to /api/fetch',    method: 'POST', url: `${EMBED}/api/fetch`, ct: 'application/x-www-form-urlencoded', body: `slug=${slug}` },
+    { label: 'POST to /stream',       method: 'POST', url: `${EMBED}/stream`, ct: 'application/x-www-form-urlencoded', body: `slug=${slug}` },
+  ];
+  for (const a of attempts) {
+    try {
+      const h = { ...headers };
+      if (a.ct) h['Content-Type'] = a.ct;
+      const r = await rawFetch(a.url, { method: a.method, headers: h, body: a.body || null });
+      results[a.label] = { status: r.status, len: r.buffer.length, utf8: r.buffer.slice(0,200).toString('utf8'), hex: r.buffer.slice(0,32).toString('hex') };
+    } catch(e) { results[a.label] = { error: e.message }; }
+  }
   res.json(results);
 });
 
