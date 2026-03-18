@@ -33,6 +33,28 @@ app.use((req, res, next) => {
   next();
 });
 
+// Install page
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head><title>PPV.to Stremio Addon</title></head>
+      <body style="font-family:sans-serif;text-align:center;padding:50px;background:#1a1a2e;color:white">
+        <h1 style="color:#7b5ea7">PPV.to Stremio Addon</h1>
+        <p>Live sports — Basketball, Football, Hockey & more</p>
+        <br>
+        <a href="stremio://${req.headers.host}/manifest.json">
+          <button style="padding:15px 30px;font-size:18px;background:#7b5ea7;color:white;border:none;border-radius:8px;cursor:pointer">
+            Install in Stremio
+          </button>
+        </a>
+        <br><br>
+        <p style="color:#888;font-size:13px">Or manually add this URL in Stremio:<br>
+        <code style="color:#aaa">https://${req.headers.host}/manifest.json</code></p>
+      </body>
+    </html>
+  `);
+});
+
 app.get('/manifest.json', (req, res) => {
   res.json(MANIFEST);
 });
@@ -126,7 +148,7 @@ async function extractM3u8FromEmbed(iframeUrl) {
     await page.setRequestInterception(true);
     page.on('request', request => {
       const url = request.url();
-      if (url.includes('modifiles') || url.includes('m3u8') || url.includes('pooembed')) {
+      if (url.includes('modifiles') || url.includes('m3u8') || url.includes('fetch')) {
         console.log('REQUEST:', url);
       }
       if (url.includes('modifiles') && url.includes('index.m3u8')) {
@@ -140,10 +162,19 @@ async function extractM3u8FromEmbed(iframeUrl) {
       }
     });
 
-    page.on('response', response => {
+    page.on('response', async response => {
       const url = response.url();
       if (url.includes('modifiles') || url.includes('m3u8')) {
         console.log('RESPONSE:', response.status(), url);
+      }
+      if (url.includes('pooembed.eu/fetch')) {
+        console.log('FETCH RESPONSE status:', response.status());
+        try {
+          const buf = await response.buffer();
+          console.log('FETCH RESPONSE bytes:', buf.length, 'hex:', buf.slice(0,20).toString('hex'));
+        } catch(e) {
+          console.log('FETCH RESPONSE read error:', e.message);
+        }
       }
     });
 
@@ -158,7 +189,7 @@ async function extractM3u8FromEmbed(iframeUrl) {
         const interval = setInterval(() => {
           if (m3u8Url) { clearInterval(interval); resolve(); }
         }, 500);
-        setTimeout(() => { clearInterval(interval); resolve(); }, 10000);
+        setTimeout(() => { clearInterval(interval); resolve(); }, 20000);
       });
     }
 
