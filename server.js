@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 7000;
 const HOST = process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
 
-const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorsports', 'Wrestling', '24/7 Streams'];
+const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorsports', '24/7 Streams'];
 
 const MANIFEST = {
   id: 'com.ppvto.stremio',
@@ -150,6 +150,15 @@ app.get('/cached-m3u8/:key', (req, res) => {
   res.send(cached);
 });
 
+// Debug endpoint to view cached m3u8 content
+app.get('/debug-cache', (req, res) => {
+  const keys = Object.keys(m3u8Cache);
+  if (keys.length === 0) return res.send('Cache empty');
+  const latest = keys[keys.length - 1];
+  res.setHeader('Content-Type', 'text/plain');
+  res.send(m3u8Cache[latest]);
+});
+
 // Queue to prevent multiple Puppeteer instances running simultaneously
 let puppeteerQueue = Promise.resolve();
 
@@ -205,6 +214,9 @@ async function _extractM3u8(iframeUrl) {
     });
 
     page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+    page.on('requestfailed', request => {
+      console.log('FAILED:', request.url(), request.failure().errorText);
+    });
 
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
@@ -312,7 +324,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
 
       // Cache the m3u8 content and serve it via a static endpoint
       const cacheKey = `${streamId}_${Date.now()}`;
-      m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?');
+      m3u8Cache[cacheKey] = result.content.replace(/.jpg?/g, '.ts?');
       // Auto-expire cache after 5 minutes
       setTimeout(() => delete m3u8Cache[cacheKey], 300000);
 
