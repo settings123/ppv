@@ -301,7 +301,9 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       const m3u8Url = await extractM3u8FromEmbed(iframeUrl);
       if (!m3u8Url) { console.log('No m3u8 found'); continue; }
       console.log(`Found: ${m3u8Url}`);
-      const proxyUrl = `${HOST}/proxy/m3u8?url=${encodeURIComponent(m3u8Url)}`;
+      // Use the sub-playlist directly instead of master to avoid token expiry issues
+      const subUrl = m3u8Url.replace('index.m3u8', 'tracks-v1a1/mono.ts.m3u8');
+      const proxyUrl = `${HOST}/proxy/m3u8?url=${encodeURIComponent(subUrl)}`;
       results.push({
         name: source.tag || source.name || 'Stream',
         title: source.name || stream.name,
