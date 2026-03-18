@@ -82,6 +82,13 @@ function flattenStreams(categories) {
   return all;
 }
 
+function colorBackground(colors) {
+  const c1 = (colors && colors[0]) ? colors[0] : '#1a1a2e';
+  const c2 = (colors && colors[1]) ? colors[1] : '#16213e';
+  // Return a URL to our gradient endpoint
+  return `${HOST}/bg?c1=${encodeURIComponent(c1)}&c2=${encodeURIComponent(c2)}`;
+}
+
 function streamToMeta(stream) {
   const now = Math.floor(Date.now() / 1000);
   const isLive = stream.always_live || (stream.starts_at <= now && stream.ends_at >= now);
@@ -97,7 +104,7 @@ function streamToMeta(stream) {
     name,
     poster: stream.poster || '',
     posterShape: 'landscape',
-    background: stream.poster || '',
+    background: colorBackground(stream.colors),
     logo: stream.poster || '',
     description: `${stream.tag} — ${stream.category_name}`,
     genres: [stream.category_name],
@@ -211,17 +218,37 @@ async function extractM3u8FromEmbed(iframeUrl) {
   }
 }
 
+// Gradient background image endpoint
+app.get('/bg', (req, res) => {
+  const c1 = req.query.c1 || '#1a1a2e';
+  const c2 = req.query.c2 || '#16213e';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
+    <defs>
+      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:${c1};stop-opacity:1" />
+        <stop offset="100%" style="stop-color:${c2};stop-opacity:1" />
+      </linearGradient>
+    </defs>
+    <rect width="1920" height="1080" fill="url(#g)"/>
+  </svg>`;
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.send(svg);
+});
+
 app.get('/proxy/m3u8', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).send('Missing url');
   try {
     const m3u8Res = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://pooembed.eu/',
-        'Origin': 'https://pooembed.eu'
+        'Origin': 'https://pooembed.eu',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9'
       }
     });
+    console.log('Proxy fetch status:', m3u8Res.status, url);
     let content = await m3u8Res.text();
 
     // Rewrite .jpg? to .ts? so players accept the segments
