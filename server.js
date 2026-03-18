@@ -126,6 +126,9 @@ async function extractM3u8FromEmbed(iframeUrl) {
     await page.setRequestInterception(true);
     page.on('request', request => {
       const url = request.url();
+      if (url.includes('modifiles') || url.includes('m3u8') || url.includes('pooembed')) {
+        console.log('REQUEST:', url);
+      }
       if (url.includes('modifiles') && url.includes('index.m3u8')) {
         m3u8Url = url;
       }
@@ -136,6 +139,16 @@ async function extractM3u8FromEmbed(iframeUrl) {
         request.continue();
       }
     });
+
+    page.on('response', response => {
+      const url = response.url();
+      if (url.includes('modifiles') || url.includes('m3u8')) {
+        console.log('RESPONSE:', response.status(), url);
+      }
+    });
+
+    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+    page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
 
     await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
