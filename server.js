@@ -1,5 +1,6 @@
 const express = require('express');
 const fetch = require('node-fetch');
+const puppeteer = require('puppeteer');
 const app = express();
 
 const PORT = process.env.PORT || 7000;
@@ -121,30 +122,63 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
-// Extract m3u8 URL from pooembed page
+// Extract m3u8 URL from pooembed page using Puppeteer
 async function extractM3u8FromEmbed(iframeUrl) {
+  let browser;
   try {
-    const res = await fetch(iframeUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://ppv.to/',
-        'Origin': 'https://ppv.to'
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ]
+    });
+
+    const page = await browser.newPage();
+
+    // Intercept network requests to catch the m3u8 URL
+    let m3u8Url = null;
+
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      const url = request.url();
+      // Capture index.m3u8 from modifiles CDN
+      if (url.includes('modifiles') && url.includes('index.m3u8')) {
+        m3u8Url = url;
+      }
+      // Block ads and unnecessary resources to speed things up
+      const resourceType = request.resourceType();
+      if (['image', 'font', 'stylesheet'].includes(resourceType)) {
+        request.abort();
+      } else {
+        request.continue();
       }
     });
-    const html = await res.text();
 
-    // Look for m3u8 URL in the page source
-    const m3u8Match = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
-    if (m3u8Match) return m3u8Match[0];
+    await page.setExtraHTTPHeaders({
+      'Referer': 'https://ppv.to/'
+    });
 
-    // Also check for lb\d\.modifiles pattern
-    const modiMatch = html.match(/https?:\/\/lb\d+\.modifiles\.[^"'\s]+\.m3u8[^"'\s]*/);
-    if (modiMatch) return modiMatch[0];
+    await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
-    return null;
+    // Wait up to 10 more seconds for the m3u8 to appear
+    if (!m3u8Url) {
+      await new Promise(resolve => {
+        const interval = setInterval(() => {
+          if (m3u8Url) { clearInterval(interval); resolve(); }
+        }, 500);
+        setTimeout(() => { clearInterval(interval); resolve(); }, 10000);
+      });
+    }
+
+    return m3u8Url;
   } catch (e) {
-    console.error('Embed extraction error:', e);
+    console.error('Puppeteer extraction error:', e.message);
     return null;
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
@@ -193,10 +227,16 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       const iframeUrl = source.iframe;
       if (!iframeUrl) continue;
 
+      console.log(`Extracting m3u8 for: ${iframeUrl}`);
       const m3u8Url = await extractM3u8FromEmbed(iframeUrl);
-      if (!m3u8Url) continue;
+      if (!m3u8Url) {
+        console.log(`No m3u8 found for: ${iframeUrl}`);
+        continue;
+      }
 
-      // Point to our local proxy which rewrites .jpg to .ts
+      console.log(`Found m3u8: ${m3u8Url}`);
+
+      // Point to our proxy which rewrites .jpg to .ts
       const proxyUrl = `${HOST}/proxy/m3u8?url=${encodeURIComponent(m3u8Url)}`;
 
       results.push({
