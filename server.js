@@ -139,10 +139,43 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
-// In-memory cache for m3u8 content
+// In-memory cache for m3u8 content and live stream URLs
 const m3u8Cache = {};
+const liveStreams = {}; // stores { monoUrl, lastContent, lastFetch }
 
-// Serve cached m3u8 content
+// Fetch fresh mono.ts.m3u8 content directly (no auth needed for segments)
+async function fetchFreshPlaylist(monoUrl) {
+  try {
+    const res = await fetch(monoUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://pooembed.eu/',
+        'Origin': 'https://pooembed.eu'
+      }
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
+  } catch(e) {
+    console.error('Fresh playlist fetch error:', e.message);
+    return null;
+  }
+}
+
+// Serve live m3u8 — refreshes from CDN each time
+app.get('/live-m3u8/:key', async (req, res) => {
+  const stream = liveStreams[req.params.key];
+  if (!stream) return res.status(404).send('Stream not found or expired');
+  
+  // Fetch fresh content directly from CDN
+  const fresh = await fetchFreshPlaylist(stream.monoUrl);
+  if (!fresh) return res.status(503).send('Could not fetch playlist');
+  
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.send(fresh);
+});
+
+// Serve cached m3u8 content (fallback)
 app.get('/cached-m3u8/:key', (req, res) => {
   const cached = m3u8Cache[req.params.key];
   if (!cached) return res.status(404).send('Expired or not found');
@@ -323,10 +356,13 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       console.log(`Found: ${result.url}`);
 
       // Cache the m3u8 content and serve it via a static endpoint
-      const cacheKey = `${streamId}_${Date.now()}`;
+      const cacheKey = `${streamId}_${source.id || 0}`;
+      iframeCache[cacheKey] = iframeUrl;
       m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
-      // Auto-expire cache after 5 minutes
-      setTimeout(() => delete m3u8Cache[cacheKey], 300000);
+      // Start background refresh if not already running
+      if (!refreshIntervals[cacheKey]) {
+        startRefreshing(cacheKey, iframeUrl);
+      }
 
       const proxyUrl = `${HOST}/cached-m3u8/${cacheKey}`;
       results.push({
