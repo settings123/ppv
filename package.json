@@ -1,16 +1,13 @@
 {
-  "name": "streamtv-nba",
-  "version": "3.0.0",
-  "description": "NBA live stream proxy + Stremio addon",
-  "main": "server.js",
+  "name": "ppvto-stremio-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon for ppv.to streams",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
+    "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "yt-dlp-wrap": "^2.3.12"
+    "node-fetch": "^2.7.0"
   }
 }
