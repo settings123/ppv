@@ -139,6 +139,17 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
+// In-memory cache for m3u8 content
+const m3u8Cache = {};
+
+// Serve cached m3u8 content
+app.get('/cached-m3u8/:key', (req, res) => {
+  const cached = m3u8Cache[req.params.key];
+  if (!cached) return res.status(404).send('Expired or not found');
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.send(cached);
+});
+
 // Queue to prevent multiple Puppeteer instances running simultaneously
 let puppeteerQueue = Promise.resolve();
 
@@ -162,14 +173,12 @@ async function _extractM3u8(iframeUrl) {
     });
 
     const page = await browser.newPage();
+    let m3u8Content = null;
     let m3u8Url = null;
 
     await page.setRequestInterception(true);
     page.on('request', request => {
       const url = request.url();
-      if (url.includes('modifiles') || url.includes('m3u8') || url.includes('fetch')) {
-        console.log('REQUEST:', url);
-      }
       if (url.includes('modifiles') && url.includes('index.m3u8')) {
         m3u8Url = url;
       }
@@ -183,22 +192,19 @@ async function _extractM3u8(iframeUrl) {
 
     page.on('response', async response => {
       const url = response.url();
-      if (url.includes('modifiles') || url.includes('m3u8')) {
-        console.log('RESPONSE:', response.status(), url);
-      }
-      if (url.includes('pooembed.eu/fetch')) {
-        console.log('FETCH RESPONSE status:', response.status());
+      // Intercept the mono.ts.m3u8 response and grab its content
+      if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
         try {
-          const buf = await response.buffer();
-          console.log('FETCH RESPONSE bytes:', buf.length, 'hex:', buf.slice(0,20).toString('hex'));
+          const text = await response.text();
+          m3u8Content = text;
+          console.log('Captured mono.ts.m3u8 content, length:', text.length);
         } catch(e) {
-          console.log('FETCH RESPONSE read error:', e.message);
+          console.log('Could not read mono.ts.m3u8:', e.message);
         }
       }
     });
 
     page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-    page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
 
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
@@ -208,16 +214,17 @@ async function _extractM3u8(iframeUrl) {
     });
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
-    if (!m3u8Url) {
+    // Wait for mono.ts.m3u8 content
+    if (!m3u8Content) {
       await new Promise(resolve => {
         const interval = setInterval(() => {
-          if (m3u8Url) { clearInterval(interval); resolve(); }
+          if (m3u8Content) { clearInterval(interval); resolve(); }
         }, 500);
         setTimeout(() => { clearInterval(interval); resolve(); }, 20000);
       });
     }
 
-    return m3u8Url;
+    return { url: m3u8Url, content: m3u8Content };
   } catch (e) {
     console.error('Puppeteer error:', e.message);
     return null;
@@ -298,12 +305,18 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       const iframeUrl = source.iframe;
       if (!iframeUrl) continue;
       console.log(`Extracting: ${iframeUrl}`);
-      const m3u8Url = await extractM3u8FromEmbed(iframeUrl);
-      if (!m3u8Url) { console.log('No m3u8 found'); continue; }
-      console.log(`Found: ${m3u8Url}`);
-      // Use the sub-playlist directly instead of master to avoid token expiry issues
-      const subUrl = m3u8Url.replace('index.m3u8', 'tracks-v1a1/mono.ts.m3u8');
-      const proxyUrl = `${HOST}/proxy/m3u8?url=${encodeURIComponent(subUrl)}`;
+      const result = await extractM3u8FromEmbed(iframeUrl);
+      if (!result) { console.log('No m3u8 found'); continue; }
+      if (!result || !result.content) { console.log('No m3u8 content'); continue; }
+      console.log(`Found: ${result.url}`);
+
+      // Cache the m3u8 content and serve it via a static endpoint
+      const cacheKey = `${streamId}_${Date.now()}`;
+      m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?');
+      // Auto-expire cache after 5 minutes
+      setTimeout(() => delete m3u8Cache[cacheKey], 300000);
+
+      const proxyUrl = `${HOST}/cached-m3u8/${cacheKey}`;
       results.push({
         name: source.tag || source.name || 'Stream',
         title: source.name || stream.name,
