@@ -1,15 +1,14 @@
 const express = require('express');
 const fetch = require('node-fetch');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('chrome-aws-lambda');
 const app = express();
 
 const PORT = process.env.PORT || 7000;
 const HOST = process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
 
-// Categories we support
 const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorsports', 'Wrestling', '24/7 Streams'];
 
-// Stremio manifest
 const MANIFEST = {
   id: 'com.ppvto.stremio',
   version: '1.0.0',
@@ -29,19 +28,16 @@ const MANIFEST = {
   idPrefixes: ['ppvto:']
 };
 
-// Add CORS headers
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', '*');
   next();
 });
 
-// Manifest endpoint
 app.get('/manifest.json', (req, res) => {
   res.json(MANIFEST);
 });
 
-// Fetch all streams from ppv.to API
 async function fetchStreams() {
   const res = await fetch('https://api.ppv.to/api/streams', {
     headers: {
@@ -53,7 +49,6 @@ async function fetchStreams() {
   return data.streams || [];
 }
 
-// Flatten all streams into a single list
 function flattenStreams(categories) {
   const all = [];
   for (const cat of categories) {
@@ -64,7 +59,6 @@ function flattenStreams(categories) {
   return all;
 }
 
-// Format a stream as a Stremio meta object
 function streamToMeta(stream) {
   const now = Math.floor(Date.now() / 1000);
   const isLive = stream.always_live || (stream.starts_at <= now && stream.ends_at >= now);
@@ -86,35 +80,26 @@ function streamToMeta(stream) {
   };
 }
 
-// Catalog endpoint
 app.get('/catalog/tv/ppvto-live.json', async (req, res) => {
   try {
     const categories = await fetchStreams();
     const streams = flattenStreams(categories);
     const genre = req.query.genre;
-
-    const filtered = genre
-      ? streams.filter(s => s.category_name === genre)
-      : streams;
-
-    const metas = filtered.map(streamToMeta);
-    res.json({ metas });
+    const filtered = genre ? streams.filter(s => s.category_name === genre) : streams;
+    res.json({ metas: filtered.map(streamToMeta) });
   } catch (e) {
     console.error('Catalog error:', e);
     res.json({ metas: [] });
   }
 });
 
-// Meta endpoint
 app.get('/meta/tv/:id.json', async (req, res) => {
   try {
     const streamId = req.params.id.replace('ppvto:', '');
     const categories = await fetchStreams();
     const streams = flattenStreams(categories);
     const stream = streams.find(s => String(s.id) === streamId);
-
     if (!stream) return res.json({ meta: {} });
-
     res.json({ meta: streamToMeta(stream) });
   } catch (e) {
     console.error('Meta error:', e);
@@ -122,33 +107,25 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
-// Extract m3u8 URL from pooembed page using Puppeteer
 async function extractM3u8FromEmbed(iframeUrl) {
   let browser;
   try {
     browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ]
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath,
+      headless: chromium.headless,
     });
 
     const page = await browser.newPage();
-
-    // Intercept network requests to catch the m3u8 URL
     let m3u8Url = null;
 
     await page.setRequestInterception(true);
     page.on('request', request => {
       const url = request.url();
-      // Capture index.m3u8 from modifiles CDN
       if (url.includes('modifiles') && url.includes('index.m3u8')) {
         m3u8Url = url;
       }
-      // Block ads and unnecessary resources to speed things up
       const resourceType = request.resourceType();
       if (['image', 'font', 'stylesheet'].includes(resourceType)) {
         request.abort();
@@ -157,13 +134,9 @@ async function extractM3u8FromEmbed(iframeUrl) {
       }
     });
 
-    await page.setExtraHTTPHeaders({
-      'Referer': 'https://ppv.to/'
-    });
-
+    await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
-    // Wait up to 10 more seconds for the m3u8 to appear
     if (!m3u8Url) {
       await new Promise(resolve => {
         const interval = setInterval(() => {
@@ -175,18 +148,16 @@ async function extractM3u8FromEmbed(iframeUrl) {
 
     return m3u8Url;
   } catch (e) {
-    console.error('Puppeteer extraction error:', e.message);
+    console.error('Puppeteer error:', e.message);
     return null;
   } finally {
     if (browser) await browser.close();
   }
 }
 
-// Proxy m3u8 endpoint — rewrites .jpg segments to .ts
 app.get('/proxy/m3u8', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).send('Missing url');
-
   try {
     const m3u8Res = await fetch(url, {
       headers: {
@@ -195,12 +166,8 @@ app.get('/proxy/m3u8', async (req, res) => {
         'Origin': 'https://pooembed.eu'
       }
     });
-
     let content = await m3u8Res.text();
-
-    // Rewrite .jpg? to .ts? so players accept the segments
     content = content.replace(/\.jpg\?/g, '.ts?');
-
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.send(content);
   } catch (e) {
@@ -209,36 +176,25 @@ app.get('/proxy/m3u8', async (req, res) => {
   }
 });
 
-// Stream endpoint
 app.get('/stream/tv/:id.json', async (req, res) => {
   try {
     const streamId = req.params.id.replace('ppvto:', '');
     const categories = await fetchStreams();
     const streams = flattenStreams(categories);
     const stream = streams.find(s => String(s.id) === streamId);
-
     if (!stream) return res.json({ streams: [] });
 
-    // Build list of sources to try (main + substreams)
     const sources = [stream, ...(stream.substreams || [])];
     const results = [];
 
     for (const source of sources) {
       const iframeUrl = source.iframe;
       if (!iframeUrl) continue;
-
-      console.log(`Extracting m3u8 for: ${iframeUrl}`);
+      console.log(`Extracting: ${iframeUrl}`);
       const m3u8Url = await extractM3u8FromEmbed(iframeUrl);
-      if (!m3u8Url) {
-        console.log(`No m3u8 found for: ${iframeUrl}`);
-        continue;
-      }
-
-      console.log(`Found m3u8: ${m3u8Url}`);
-
-      // Point to our proxy which rewrites .jpg to .ts
+      if (!m3u8Url) { console.log('No m3u8 found'); continue; }
+      console.log(`Found: ${m3u8Url}`);
       const proxyUrl = `${HOST}/proxy/m3u8?url=${encodeURIComponent(m3u8Url)}`;
-
       results.push({
         name: source.tag || source.name || 'Stream',
         title: source.name || stream.name,
@@ -255,6 +211,5 @@ app.get('/stream/tv/:id.json', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n✅ PPV.to Stremio Addon running!`);
-  console.log(`\n👉 Add this URL to Stremio:`);
   console.log(`   ${HOST}/manifest.json\n`);
 });
