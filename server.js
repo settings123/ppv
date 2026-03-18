@@ -324,7 +324,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
 
       // Cache the m3u8 content and serve it via a static endpoint
       const cacheKey = `${streamId}_${Date.now()}`;
-      m3u8Cache[cacheKey] = result.content.replace(/.jpg?/g, '.ts?');
+      m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
       // Auto-expire cache after 5 minutes
       setTimeout(() => delete m3u8Cache[cacheKey], 300000);
 
