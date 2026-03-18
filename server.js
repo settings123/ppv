@@ -139,7 +139,15 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
+// Queue to prevent multiple Puppeteer instances running simultaneously
+let puppeteerQueue = Promise.resolve();
+
 async function extractM3u8FromEmbed(iframeUrl) {
+  const result = await (puppeteerQueue = puppeteerQueue.then(() => _extractM3u8(iframeUrl)));
+  return result;
+}
+
+async function _extractM3u8(iframeUrl) {
   let browser;
   try {
     browser = await puppeteer.launch({
