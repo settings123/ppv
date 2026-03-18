@@ -259,20 +259,21 @@ app.get('/proxy/m3u8', async (req, res) => {
     console.log('Proxy fetch status:', m3u8Res.status, url);
     let content = await m3u8Res.text();
 
-    // Rewrite .jpg? to .ts? so players accept the segments
-    content = content.replace(/\.jpg\?/g, '.ts?');
-
-    // Rewrite relative URLs to absolute, routing through our proxy
     const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
-    content = content.replace(/^(?!#)(?!https?:\/\/)(.+\.m3u8.*)$/gm, (match) => {
+
+    // Rewrite relative .m3u8 sub-playlists through our proxy (so we can rewrite .jpg segments)
+    content = content.replace(/^(?!#)(?!https?:\/\/)([^\s]+\.m3u8[^\s]*)$/gm, (match) => {
       const absUrl = baseUrl + match;
       return `${HOST}/proxy/m3u8?url=${encodeURIComponent(absUrl)}`;
     });
 
-    // Rewrite relative segment URLs (.ts) to absolute
+    // Rewrite relative segment URLs to absolute (serve directly from CDN)
     content = content.replace(/^(?!#)(?!https?:\/\/)([^\s]+)$/gm, (match) => {
       return baseUrl + match;
     });
+
+    // Rewrite .jpg? to .ts? so players accept the segments
+    content = content.replace(/\.jpg\?/g, '.ts?');
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.send(content);
