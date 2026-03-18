@@ -356,13 +356,10 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       console.log(`Found: ${result.url}`);
 
       // Cache the m3u8 content and serve it via a static endpoint
-      const cacheKey = `${streamId}_${source.id || 0}`;
-      iframeCache[cacheKey] = iframeUrl;
+      const cacheKey = `${streamId}_${Date.now()}`;
       m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
-      // Start background refresh if not already running
-      if (!refreshIntervals[cacheKey]) {
-        startRefreshing(cacheKey, iframeUrl);
-      }
+      // Auto-expire cache after 5 minutes
+      setTimeout(() => delete m3u8Cache[cacheKey], 300000);
 
       const proxyUrl = `${HOST}/cached-m3u8/${cacheKey}`;
       results.push({
