@@ -96,7 +96,9 @@ function streamToMeta(stream) {
     type: 'tv',
     name,
     poster: stream.poster || '',
+    posterShape: 'landscape',
     background: stream.poster || '',
+    logo: stream.poster || '',
     description: `${stream.tag} — ${stream.category_name}`,
     genres: [stream.category_name],
     releaseInfo: isLive ? 'LIVE' : isUpcoming ? new Date(stream.starts_at * 1000).toLocaleString() : 'Ended'
@@ -221,7 +223,22 @@ app.get('/proxy/m3u8', async (req, res) => {
       }
     });
     let content = await m3u8Res.text();
+
+    // Rewrite .jpg? to .ts? so players accept the segments
     content = content.replace(/\.jpg\?/g, '.ts?');
+
+    // Rewrite relative URLs to absolute, routing through our proxy
+    const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
+    content = content.replace(/^(?!#)(?!https?:\/\/)(.+\.m3u8.*)$/gm, (match) => {
+      const absUrl = baseUrl + match;
+      return `${HOST}/proxy/m3u8?url=${encodeURIComponent(absUrl)}`;
+    });
+
+    // Rewrite relative segment URLs (.ts) to absolute
+    content = content.replace(/^(?!#)(?!https?:\/\/)([^\s]+)$/gm, (match) => {
+      return baseUrl + match;
+    });
+
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.send(content);
   } catch (e) {
