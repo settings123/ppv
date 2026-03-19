@@ -246,7 +246,7 @@ async function startRefreshing(cacheKey, iframeUrl) {
         let newContent = null;
         const responseHandler = async (response) => {
           const url = response.url();
-          if (url.includes('modifiles') && url.includes('index.m3u8')) {
+          if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
             try {
               const text = await response.text();
               newContent = text;
@@ -308,14 +308,13 @@ async function _extractM3u8(iframeUrl) {
 
     page.on('response', async response => {
       const url = response.url();
-      if (url.includes('modifiles') && url.includes('index.m3u8')) {
+      if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
         try {
           const text = await response.text();
-          // index.m3u8 is the master playlist - contains video+audio tracks
           m3u8Content = text;
-          console.log('Captured index.m3u8 content, length:', text.length);
+          console.log('Captured mono.ts.m3u8 content, length:', text.length);
         } catch (e) {
-          console.log('Could not read index.m3u8:', e.message);
+          console.log('Could not read mono.ts.m3u8:', e.message);
         }
       }
     });
@@ -371,15 +370,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       console.log(`Found: ${result.url}`);
 
       const cacheKey = `${streamId}_${source.id || 0}_${Date.now()}`;
-      // Rewrite relative sub-playlist URLs to absolute via our proxy
-const baseUrl = result.url ? result.url.substring(0, result.url.lastIndexOf('/') + 1) : '';
-let m3u8Content = result.content;
-if (baseUrl) {
-  m3u8Content = m3u8Content.replace(/^(?!#)(?!https?:\/\/)([^\s]+\.m3u8[^\s]*)$/gm, (match) => {
-    return `${HOST}/cached-sub/${encodeURIComponent(baseUrl + match)}`;
-  });
-}
-m3u8Cache[cacheKey] = m3u8Content;
+      m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, '.ts');
       m3u8IframeMap[cacheKey] = iframeUrl;
 
       // Auto-expire after 4 hours
