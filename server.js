@@ -12,7 +12,7 @@ const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorspor
 
 const MANIFEST = {
   id: 'com.ppvto.stremio',
-  version: '1.0.2',
+  version: '1.0.3',
   name: 'PPV.to',
   description: 'Live sports streams from ppv.to',
   types: ['tv'],
@@ -96,8 +96,7 @@ function flattenStreams(categories) {
       if (stream.always_live) { all.push({ ...stream, category_name: cat.category }); continue; }
       const isLive = stream.starts_at <= now && stream.ends_at >= now;
       const startsWithin8Hours = stream.starts_at > now && stream.starts_at <= eightHoursFromNow;
-      const startedToday = stream.starts_at >= todayTimestamp;
-      if (isLive || startsWithin8Hours || startedToday) {
+      if (isLive || startsWithin8Hours) {
         all.push({ ...stream, category_name: cat.category });
       }
     }
@@ -247,33 +246,8 @@ async function _extractM3u8(iframeUrl) {
 }
 
 function rewriteM3u8(content) {
-  // Rewrite .jpg extension to .ts
-  let out = content.replace(/\.jpg(?=\?)/g, '.ts');
-  // Rewrite segment URLs to go through our proxy
-  out = out.replace(/^(https:\/\/r2-[^\s]+)$/gm, (match) => {
-    return `${HOST}/seg?url=${encodeURIComponent(match)}`;
-  });
-  return out;
+  return content.replace(/\.jpg(?=\?)/g, '.ts');
 }
-
-// Segment proxy — pipes CDN bytes through our server
-app.get('/seg', async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).send('Missing url');
-  try {
-    const r = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://pooembed.eu/'
-      }
-    });
-    res.setHeader('Content-Type', 'video/mp2t');
-    r.body.pipe(res);
-  } catch(e) {
-    console.error('Segment proxy error:', e.message);
-    res.status(500).send('Error');
-  }
-});
 
 // Background refresh — runs independently, no queue
 async function startRefreshing(cacheKey, iframeUrl) {
