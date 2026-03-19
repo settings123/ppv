@@ -12,7 +12,7 @@ const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorspor
 
 const MANIFEST = {
   id: 'com.ppvto.stremio',
-  version: '1.0.0',
+  version: '1.0.1',
   name: 'PPV.to',
   description: 'Live sports streams from ppv.to — Basketball, Football, Hockey & more',
   types: ['tv'],
@@ -228,14 +228,14 @@ app.get('/debug-cache', (req, res) => {
   res.send(m3u8Cache[latest]);
 });
 
-// Background refresh — launches fresh browser every 20 seconds
+// Background refresh — launches fresh browser every 20 seconds, bypasses queue
 async function startRefreshing(cacheKey, iframeUrl) {
   while (m3u8Cache[cacheKey] !== undefined) {
     await new Promise(r => setTimeout(r, 20000));
     if (m3u8Cache[cacheKey] === undefined) break;
     try {
       console.log(`Refreshing: ${cacheKey}`);
-      const result = await extractM3u8FromEmbed(iframeUrl);
+      const result = await _extractM3u8(iframeUrl);
       if (result && result.content) {
         m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, '.ts');
         console.log(`Refreshed: ${cacheKey}`);
