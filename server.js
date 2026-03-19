@@ -201,7 +201,7 @@ async function startRefreshing(cacheKey, iframeUrl) {
       console.log(`Refreshing: ${cacheKey}`);
       const result = await extractM3u8FromEmbed(iframeUrl);
       if (result && result.content) {
-        m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
+        m3u8Cache[cacheKey] = result.content;
       }
     } catch (e) {
       console.error('Refresh error:', e.message);
@@ -308,7 +308,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       console.log(`Found: ${result.url}`);
 
       const cacheKey = `${streamId}_${source.id || 0}_${Date.now()}`;
-      m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
+      m3u8Cache[cacheKey] = result.content;
       m3u8IframeMap[cacheKey] = iframeUrl;
 
       // Auto-expire after 4 hours
