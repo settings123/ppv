@@ -137,7 +137,7 @@ function streamToMeta(stream) {
         const m = est.getUTCMinutes().toString().padStart(2, '0');
         const ampm = h >= 12 ? 'PM' : 'AM';
         const h12 = h % 12 || 12;
-        return \`\${est.getUTCMonth()+1}/\${est.getUTCDate()} \${h12}:\${m} \${ampm} ET\`;
+        return `${est.getUTCMonth()+1}/${est.getUTCDate()} ${h12}:${m} ${ampm} ET`;
       }
     })()
   };
