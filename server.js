@@ -246,8 +246,34 @@ async function _extractM3u8(iframeUrl) {
 }
 
 function rewriteM3u8(content) {
-  return content.replace(/\.jpg(?=\?)/g, '.ts');
+  // Rewrite .jpg to .ts
+  let out = content.replace(/\.jpg(?=\?)/g, '.ts');
+  // Route all r2 segment URLs through our proxy
+  out = out.replace(/(https:\/\/r2-[^\s]+)/g, (match) => {
+    return HOST + '/seg?url=' + encodeURIComponent(match);
+  });
+  return out;
 }
+
+// Segment proxy - fetches segment and pipes it, stripping problematic headers
+app.get('/seg', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).send('Missing url');
+  try {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'aws-sdk' }
+    });
+    if (!r.ok) {
+      console.error('Segment fetch failed:', r.status, url.substring(0, 80));
+      return res.status(r.status).send('Upstream error');
+    }
+    res.setHeader('Content-Type', 'video/mp2t');
+    r.body.pipe(res);
+  } catch(e) {
+    console.error('Segment proxy error:', e.message);
+    res.status(500).send('Error');
+  }
+});
 
 // Background refresh — runs independently, no queue
 async function startRefreshing(cacheKey, iframeUrl) {
