@@ -247,7 +247,7 @@ async function _extractM3u8(iframeUrl) {
 function rewriteM3u8(content) {
   let out = content.replace(/\.jpg(?=\?)/g, '.ts');
   out = out.replace(/(https:\/\/r2-[^\s]+)/g, (match) => {
-    return HOST + '/seg?url=' + encodeURIComponent(match);
+    return HOST + '/seg?url=' + match;
   });
   return out;
 }
