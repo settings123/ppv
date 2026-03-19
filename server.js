@@ -12,7 +12,7 @@ const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorspor
 
 const MANIFEST = {
   id: 'com.ppvto.stremio',
-  version: '1.0.3',
+  version: '1.0.4',
   name: 'PPV.to',
   description: 'Live sports streams from ppv.to',
   types: ['tv'],
@@ -67,28 +67,20 @@ async function fetchStreams() {
 }
 
 function toEST(timestamp) {
-  const d = new Date(timestamp * 1000);
-  // Manual EST: UTC-5 (not accounting for DST, close enough)
-  const utcMs = d.getTime();
-  const estMs = utcMs - (5 * 60 * 60 * 1000);
+  const estMs = timestamp * 1000 - (5 * 60 * 60 * 1000);
   const est = new Date(estMs);
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const month = months[est.getUTCMonth()];
-  const day = est.getUTCDate();
   let h = est.getUTCHours();
   const m = est.getUTCMinutes().toString().padStart(2, '0');
   const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
-  return `${month} ${day}, ${h}:${m} ${ampm} ET`;
+  return `${months[est.getUTCMonth()]} ${est.getUTCDate()}, ${h}:${m} ${ampm} ET`;
 }
 
 function flattenStreams(categories) {
   const all = [];
   const now = Math.floor(Date.now() / 1000);
   const eightHoursFromNow = now + (8 * 60 * 60);
-  const startOfToday = new Date();
-  startOfToday.setUTCHours(0, 0, 0, 0);
-  const todayTimestamp = Math.floor(startOfToday.getTime() / 1000);
 
   for (const cat of categories) {
     if (!SUPPORTED_CATEGORIES.includes(cat.category)) continue;
@@ -174,11 +166,10 @@ app.get('/bg', (req, res) => {
   res.send(svg);
 });
 
-// In-memory cache
+// Cache: streamId -> playlist content
 const m3u8Cache = {};
-const m3u8IframeMap = {};
 
-app.get('/cached-m3u8/:key', (req, res) => {
+app.get('/stream-playlist/:key', (req, res) => {
   const cached = m3u8Cache[req.params.key];
   if (!cached) return res.status(404).send('Expired');
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
@@ -192,7 +183,7 @@ app.get('/debug-cache', (req, res) => {
   res.send(m3u8Cache[keys[keys.length - 1]]);
 });
 
-// Puppeteer queue for initial extractions only
+// Puppeteer queue for initial extractions
 let puppeteerQueue = Promise.resolve();
 
 async function extractM3u8FromEmbed(iframeUrl) {
@@ -228,13 +219,14 @@ async function _extractM3u8(iframeUrl) {
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
     });
-    await page.goto(iframeUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    // Wait up to 25 seconds for m3u8 content
-    await new Promise(resolve => {
-      const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
-      setTimeout(() => { clearInterval(iv); resolve(); }, 25000);
-    });
+    if (!m3u8Content) {
+      await new Promise(resolve => {
+        const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
+        setTimeout(() => { clearInterval(iv); resolve(); }, 15000);
+      });
+    }
     return m3u8Content;
   } catch (e) {
     console.error('Puppeteer error:', e.message);
@@ -244,28 +236,7 @@ async function _extractM3u8(iframeUrl) {
   }
 }
 
-function rewriteM3u8(content) {
-  let out = content.replace(/\.jpg(?=\?)/g, '.ts');
-  out = out.replace(/(https:\/\/r2-[^\s]+)/g, (match) => {
-    return HOST + '/seg?url=' + match;
-  });
-  return out;
-}
-
-const { spawn } = require('child_process');
-
-// Segment proxy using curl subprocess — minimal headers, no signature issues
-app.get('/seg', (req, res) => {
-  const url = decodeURIComponent(req.query.url);
-  if (!url) return res.status(400).send('Missing url');
-  res.setHeader('Content-Type', 'video/mp2t');
-  const curl = spawn('curl', ['-s', '-L', '--max-time', '10', url]);
-  curl.stdout.pipe(res);
-  curl.stderr.on('data', (d) => console.error('curl stderr:', d.toString()));
-  curl.on('error', (e) => console.error('curl error:', e.message));
-});
-
-// Background refresh — runs independently, no queue
+// Background refresh — runs independently every 20s
 async function startRefreshing(cacheKey, iframeUrl) {
   while (m3u8Cache[cacheKey] !== undefined) {
     await new Promise(r => setTimeout(r, 20000));
@@ -273,7 +244,7 @@ async function startRefreshing(cacheKey, iframeUrl) {
     try {
       const content = await _extractM3u8(iframeUrl);
       if (content) {
-        m3u8Cache[cacheKey] = rewriteM3u8(content);
+        m3u8Cache[cacheKey] = content;
         console.log(`Refreshed: ${cacheKey}`);
       }
     } catch (e) {
@@ -301,21 +272,16 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       if (!content) { console.log('No content'); continue; }
 
       const cacheKey = `${streamId}_${source.id || 0}`;
-      m3u8Cache[cacheKey] = rewriteM3u8(content);
-      m3u8IframeMap[cacheKey] = iframeUrl;
+      m3u8Cache[cacheKey] = content;
 
-      setTimeout(() => {
-        delete m3u8Cache[cacheKey];
-        delete m3u8IframeMap[cacheKey];
-      }, 4 * 60 * 60 * 1000);
-
+      setTimeout(() => delete m3u8Cache[cacheKey], 4 * 60 * 60 * 1000);
       startRefreshing(cacheKey, iframeUrl);
 
       console.log(`Found stream for ${cacheKey}`);
       results.push({
         name: source.tag || source.name || 'Stream',
         title: source.name || stream.name,
-        url: `${HOST}/cached-m3u8/${cacheKey}`
+        url: `${HOST}/stream-playlist/${cacheKey}`
       });
     }
 
