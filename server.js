@@ -260,9 +260,7 @@ app.get('/seg', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).send('Missing url');
   try {
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'aws-sdk' }
-    });
+    const r = await fetch(url);
     if (!r.ok) {
       console.error('Segment fetch failed:', r.status, url.substring(0, 80));
       return res.status(r.status).send('Upstream error');
