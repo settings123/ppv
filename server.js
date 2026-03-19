@@ -256,7 +256,7 @@ const { spawn } = require('child_process');
 
 // Segment proxy using curl subprocess — minimal headers, no signature issues
 app.get('/seg', (req, res) => {
-  const url = req.query.url;
+  const url = decodeURIComponent(req.query.url);
   if (!url) return res.status(400).send('Missing url');
   res.setHeader('Content-Type', 'video/mp2t');
   const curl = spawn('curl', ['-s', '-L', '--max-time', '10', url]);
