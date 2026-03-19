@@ -252,17 +252,17 @@ function rewriteM3u8(content) {
   return out;
 }
 
-const { execFile } = require('child_process');
+const { spawn } = require('child_process');
 
 // Segment proxy using curl subprocess — minimal headers, no signature issues
 app.get('/seg', (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).send('Missing url');
   res.setHeader('Content-Type', 'video/mp2t');
-  const curl = execFile('curl', ['-s', '-L', url], { encoding: 'buffer' }, (err, stdout) => {
-    if (err) { console.error('curl error:', err.message); return res.status(500).send('Error'); }
-  });
+  const curl = spawn('curl', ['-s', '-L', '--max-time', '10', url]);
   curl.stdout.pipe(res);
+  curl.stderr.on('data', (d) => console.error('curl stderr:', d.toString()));
+  curl.on('error', (e) => console.error('curl error:', e.message));
 });
 
 // Background refresh — runs independently, no queue
