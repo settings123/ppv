@@ -276,9 +276,28 @@ async function startRefreshing(cacheKey, iframeUrl) {
 
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    // Keep browser alive while cache key exists
+    // Start video playing so JWPlayer keeps fetching segments
+    try {
+      await page.evaluate(() => {
+        const video = document.querySelector('video');
+        if (video) video.play();
+      });
+    } catch(e) {}
+
+    // Click play button if video element not found
+    try {
+      await page.click('.jw-icon-playback');
+    } catch(e) {}
+
+    // Keep browser alive and video playing
     while (m3u8Cache[cacheKey] !== undefined) {
       await new Promise(r => setTimeout(r, 5000));
+      try {
+        await page.evaluate(() => {
+          const video = document.querySelector('video');
+          if (video && video.paused) video.play();
+        });
+      } catch(e) {}
     }
   } catch(e) {
     console.error('Refresh browser error:', e.message);
