@@ -228,14 +228,13 @@ async function _extractM3u8(iframeUrl) {
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
     });
-    await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+    await page.goto(iframeUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
-    if (!m3u8Content) {
-      await new Promise(resolve => {
-        const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
-        setTimeout(() => { clearInterval(iv); resolve(); }, 10000);
-      });
-    }
+    // Wait up to 25 seconds for m3u8 content
+    await new Promise(resolve => {
+      const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
+      setTimeout(() => { clearInterval(iv); resolve(); }, 25000);
+    });
     return m3u8Content;
   } catch (e) {
     console.error('Puppeteer error:', e.message);
@@ -246,31 +245,24 @@ async function _extractM3u8(iframeUrl) {
 }
 
 function rewriteM3u8(content) {
-  // Rewrite .jpg to .ts
   let out = content.replace(/\.jpg(?=\?)/g, '.ts');
-  // Route all r2 segment URLs through our proxy
   out = out.replace(/(https:\/\/r2-[^\s]+)/g, (match) => {
     return HOST + '/seg?url=' + encodeURIComponent(match);
   });
   return out;
 }
 
-// Segment proxy - fetches segment and pipes it, stripping problematic headers
-app.get('/seg', async (req, res) => {
+const { execFile } = require('child_process');
+
+// Segment proxy using curl subprocess — minimal headers, no signature issues
+app.get('/seg', (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).send('Missing url');
-  try {
-    const r = await fetch(url);
-    if (!r.ok) {
-      console.error('Segment fetch failed:', r.status, url.substring(0, 80));
-      return res.status(r.status).send('Upstream error');
-    }
-    res.setHeader('Content-Type', 'video/mp2t');
-    r.body.pipe(res);
-  } catch(e) {
-    console.error('Segment proxy error:', e.message);
-    res.status(500).send('Error');
-  }
+  res.setHeader('Content-Type', 'video/mp2t');
+  const curl = execFile('curl', ['-s', '-L', url], { encoding: 'buffer' }, (err, stdout) => {
+    if (err) { console.error('curl error:', err.message); return res.status(500).send('Error'); }
+  });
+  curl.stdout.pipe(res);
 });
 
 // Background refresh — runs independently, no queue

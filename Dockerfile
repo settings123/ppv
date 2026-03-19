@@ -2,6 +2,7 @@ FROM node:20-slim
 
 # Install Chrome dependencies
 RUN apt-get update && apt-get install -y \
+  curl \
   chromium \
   fonts-liberation \
   libappindicator3-1 \
