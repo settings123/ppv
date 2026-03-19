@@ -369,7 +369,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       if (!result || !result.content) { console.log('No m3u8 content'); continue; }
       console.log(`Found: ${result.url}`);
 
-      const cacheKey = `${streamId}_${source.id || 0}_${Date.now()}`;
+      const cacheKey = `${streamId}_${source.id || 0}`;
       m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, '.ts');
       m3u8IframeMap[cacheKey] = iframeUrl;
 
