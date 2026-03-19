@@ -123,7 +123,23 @@ function streamToMeta(stream) {
     logo: stream.poster || '',
     description: `${stream.tag} — ${stream.category_name}`,
     genres: [stream.category_name],
-    releaseInfo: isLive ? 'LIVE' : isUpcoming ? new Date(stream.starts_at * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' }) : 'Ended'
+    releaseInfo: (() => {
+      if (isLive) return 'LIVE';
+      if (!isUpcoming) return 'Ended';
+      // Convert to EST (UTC-5) / EDT (UTC-4)
+      const d = new Date(stream.starts_at * 1000);
+      try {
+        return d.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' });
+      } catch(e) {
+        // Fallback: manual EST offset (UTC-5)
+        const est = new Date(d.getTime() - (5 * 60 * 60 * 1000));
+        const h = est.getUTCHours();
+        const m = est.getUTCMinutes().toString().padStart(2, '0');
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const h12 = h % 12 || 12;
+        return \`\${est.getUTCMonth()+1}/\${est.getUTCDate()} \${h12}:\${m} \${ampm} ET\`;
+      }
+    })()
   };
 }
 
@@ -212,62 +228,21 @@ app.get('/debug-cache', (req, res) => {
   res.send(m3u8Cache[latest]);
 });
 
-// Background refresh — keeps browser open and refreshes page repeatedly
+// Background refresh — launches fresh browser every 20 seconds
 async function startRefreshing(cacheKey, iframeUrl) {
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-    });
-
-    await page.setRequestInterception(true);
-    page.on('request', request => {
-      const resourceType = request.resourceType();
-      if (['image', 'font', 'stylesheet'].includes(resourceType)) {
-        request.abort();
-      } else {
-        request.continue();
+  while (m3u8Cache[cacheKey] !== undefined) {
+    await new Promise(r => setTimeout(r, 20000));
+    if (m3u8Cache[cacheKey] === undefined) break;
+    try {
+      console.log(`Refreshing: ${cacheKey}`);
+      const result = await extractM3u8FromEmbed(iframeUrl);
+      if (result && result.content) {
+        m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, '.ts');
+        console.log(`Refreshed: ${cacheKey}`);
       }
-    });
-
-    while (m3u8Cache[cacheKey] !== undefined) {
-      await new Promise(r => setTimeout(r, 4000));
-      if (m3u8Cache[cacheKey] === undefined) break;
-      try {
-        let newContent = null;
-        const responseHandler = async (response) => {
-          const url = response.url();
-          if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
-            try {
-              const text = await response.text();
-              newContent = text;
-            } catch(e) {}
-          }
-        };
-        page.on('response', responseHandler);
-        await page.reload({ waitUntil: 'networkidle2', timeout: 15000 });
-        page.off('response', responseHandler);
-        if (newContent) {
-          m3u8Cache[cacheKey] = newContent.replace(/\.jpg(\?)/g, '.ts$1');
-          console.log(`Refreshed cache: ${cacheKey}`);
-        }
-      } catch (e) {
-        console.error('Refresh error:', e.message);
-      }
+    } catch (e) {
+      console.error('Refresh error:', e.message);
     }
-  } catch(e) {
-    console.error('Refresh browser error:', e.message);
-  } finally {
-    if (browser) await browser.close();
   }
 }
 
