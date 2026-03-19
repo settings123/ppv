@@ -12,9 +12,9 @@ const SUPPORTED_CATEGORIES = ['Basketball', 'Football', 'Ice Hockey', 'Motorspor
 
 const MANIFEST = {
   id: 'com.ppvto.stremio',
-  version: '1.0.1',
+  version: '1.0.2',
   name: 'PPV.to',
-  description: 'Live sports streams from ppv.to — Basketball, Football, Hockey & more',
+  description: 'Live sports streams from ppv.to',
   types: ['tv'],
   catalogs: [
     {
@@ -35,7 +35,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Install page
 app.get('/', (req, res) => {
   res.send(`
     <html>
@@ -50,26 +49,37 @@ app.get('/', (req, res) => {
           </button>
         </a>
         <br><br>
-        <p style="color:#888;font-size:13px">Or manually add this URL in Stremio:<br>
+        <p style="color:#888;font-size:13px">Or manually add:<br>
         <code style="color:#aaa">https://${req.headers.host}/manifest.json</code></p>
       </body>
     </html>
   `);
 });
 
-app.get('/manifest.json', (req, res) => {
-  res.json(MANIFEST);
-});
+app.get('/manifest.json', (req, res) => res.json(MANIFEST));
 
 async function fetchStreams() {
   const res = await fetch('https://api.ppv.to/api/streams', {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Referer': 'https://ppv.to/'
-    }
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://ppv.to/' }
   });
   const data = await res.json();
   return data.streams || [];
+}
+
+function toEST(timestamp) {
+  const d = new Date(timestamp * 1000);
+  // Manual EST: UTC-5 (not accounting for DST, close enough)
+  const utcMs = d.getTime();
+  const estMs = utcMs - (5 * 60 * 60 * 1000);
+  const est = new Date(estMs);
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const month = months[est.getUTCMonth()];
+  const day = est.getUTCDate();
+  let h = est.getUTCHours();
+  const m = est.getUTCMinutes().toString().padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${month} ${day}, ${h}:${m} ${ampm} ET`;
 }
 
 function flattenStreams(categories) {
@@ -77,18 +87,15 @@ function flattenStreams(categories) {
   const now = Math.floor(Date.now() / 1000);
   const eightHoursFromNow = now + (8 * 60 * 60);
   const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
+  startOfToday.setUTCHours(0, 0, 0, 0);
   const todayTimestamp = Math.floor(startOfToday.getTime() / 1000);
 
   for (const cat of categories) {
     if (!SUPPORTED_CATEGORIES.includes(cat.category)) continue;
     for (const stream of cat.streams || []) {
-      if (stream.always_live) {
-        all.push({ ...stream, category_name: cat.category });
-        continue;
-      }
+      if (stream.always_live) { all.push({ ...stream, category_name: cat.category }); continue; }
       const isLive = stream.starts_at <= now && stream.ends_at >= now;
-      const startsWithin8Hours = stream.starts_at <= eightHoursFromNow && stream.starts_at >= now;
+      const startsWithin8Hours = stream.starts_at > now && stream.starts_at <= eightHoursFromNow;
       const startedToday = stream.starts_at >= todayTimestamp;
       if (isLive || startsWithin8Hours || startedToday) {
         all.push({ ...stream, category_name: cat.category });
@@ -108,11 +115,9 @@ function streamToMeta(stream) {
   const now = Math.floor(Date.now() / 1000);
   const isLive = stream.always_live || (stream.starts_at <= now && stream.ends_at >= now);
   const isUpcoming = stream.starts_at > now;
-
   let name = stream.name;
   if (isLive) name = '🔴 ' + name;
   else if (isUpcoming) name = '🕐 ' + name;
-
   return {
     id: 'ppvto:' + stream.id,
     type: 'tv',
@@ -123,23 +128,7 @@ function streamToMeta(stream) {
     logo: stream.poster || '',
     description: `${stream.tag} — ${stream.category_name}`,
     genres: [stream.category_name],
-    releaseInfo: (() => {
-      if (isLive) return 'LIVE';
-      if (!isUpcoming) return 'Ended';
-      // Convert to EST (UTC-5) / EDT (UTC-4)
-      const d = new Date(stream.starts_at * 1000);
-      try {
-        return d.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' });
-      } catch(e) {
-        // Fallback: manual EST offset (UTC-5)
-        const est = new Date(d.getTime() - (5 * 60 * 60 * 1000));
-        const h = est.getUTCHours();
-        const m = est.getUTCMinutes().toString().padStart(2, '0');
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        const h12 = h % 12 || 12;
-        return `${est.getUTCMonth()+1}/${est.getUTCDate()} ${h12}:${m} ${ampm} ET`;
-      }
-    })()
+    releaseInfo: isLive ? 'LIVE' : isUpcoming ? toEST(stream.starts_at) : 'Ended'
   };
 }
 
@@ -170,7 +159,6 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
-// Gradient background endpoint
 app.get('/bg', (req, res) => {
   const c1 = req.query.c1 || '#1a1a2e';
   const c2 = req.query.c2 || '#16213e';
@@ -187,71 +175,29 @@ app.get('/bg', (req, res) => {
   res.send(svg);
 });
 
-// Sub-playlist proxy - fetches mono.ts.m3u8 and rewrites .jpg to .ts
-app.get('/cached-sub/:url', async (req, res) => {
-  const url = decodeURIComponent(req.params.url);
-  try {
-    const r = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://pooembed.eu/',
-        'Origin': 'https://pooembed.eu'
-      }
-    });
-    let text = await r.text();
-    text = text.replace(/\.jpg(\?)/g, '.ts$1');
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-    res.send(text);
-  } catch(e) {
-    res.status(500).send('Error');
-  }
-});
-
 // In-memory cache
 const m3u8Cache = {};
 const m3u8IframeMap = {};
 
-// Serve cached m3u8
 app.get('/cached-m3u8/:key', (req, res) => {
   const cached = m3u8Cache[req.params.key];
-  if (!cached) return res.status(404).send('Expired or not found');
+  if (!cached) return res.status(404).send('Expired');
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.send(cached);
 });
 
-// Debug endpoint
 app.get('/debug-cache', (req, res) => {
   const keys = Object.keys(m3u8Cache);
-  if (keys.length === 0) return res.send('Cache empty');
-  const latest = keys[keys.length - 1];
+  if (!keys.length) return res.send('Cache empty');
   res.setHeader('Content-Type', 'text/plain');
-  res.send(m3u8Cache[latest]);
+  res.send(m3u8Cache[keys[keys.length - 1]]);
 });
 
-// Background refresh — launches fresh browser every 20 seconds, bypasses queue
-async function startRefreshing(cacheKey, iframeUrl) {
-  while (m3u8Cache[cacheKey] !== undefined) {
-    await new Promise(r => setTimeout(r, 20000));
-    if (m3u8Cache[cacheKey] === undefined) break;
-    try {
-      console.log(`Refreshing: ${cacheKey}`);
-      const result = await _extractM3u8(iframeUrl);
-      if (result && result.content) {
-        m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, '.ts');
-        console.log(`Refreshed: ${cacheKey}`);
-      }
-    } catch (e) {
-      console.error('Refresh error:', e.message);
-    }
-  }
-}
-
-// Queue to prevent multiple Puppeteer instances running simultaneously
+// Puppeteer queue for initial extractions only
 let puppeteerQueue = Promise.resolve();
 
 async function extractM3u8FromEmbed(iframeUrl) {
-  const result = await (puppeteerQueue = puppeteerQueue.then(() => _extractM3u8(iframeUrl)));
-  return result;
+  return puppeteerQueue = puppeteerQueue.then(() => _extractM3u8(iframeUrl));
 }
 
 async function _extractM3u8(iframeUrl) {
@@ -262,41 +208,20 @@ async function _extractM3u8(iframeUrl) {
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
     });
-
     const page = await browser.newPage();
     let m3u8Content = null;
-    let m3u8Url = null;
 
     await page.setRequestInterception(true);
-    page.on('request', request => {
-      const url = request.url();
-      if (url.includes('modifiles') && url.includes('index.m3u8')) {
-        m3u8Url = url;
-      }
-      const resourceType = request.resourceType();
-      if (['image', 'font', 'stylesheet'].includes(resourceType)) {
-        request.abort();
-      } else {
-        request.continue();
-      }
+    page.on('request', req => {
+      const rt = req.resourceType();
+      if (['image', 'font', 'stylesheet'].includes(rt)) req.abort();
+      else req.continue();
     });
-
     page.on('response', async response => {
       const url = response.url();
       if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
-        try {
-          const text = await response.text();
-          m3u8Content = text;
-          console.log('Captured mono.ts.m3u8 content, length:', text.length);
-        } catch (e) {
-          console.log('Could not read mono.ts.m3u8:', e.message);
-        }
+        try { m3u8Content = await response.text(); } catch(e) {}
       }
-    });
-
-    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-    page.on('requestfailed', request => {
-      console.log('FAILED:', request.url(), request.failure().errorText);
     });
 
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
@@ -304,24 +229,66 @@ async function _extractM3u8(iframeUrl) {
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
     });
-
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
     if (!m3u8Content) {
       await new Promise(resolve => {
-        const interval = setInterval(() => {
-          if (m3u8Content) { clearInterval(interval); resolve(); }
-        }, 500);
-        setTimeout(() => { clearInterval(interval); resolve(); }, 20000);
+        const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
+        setTimeout(() => { clearInterval(iv); resolve(); }, 10000);
       });
     }
-
-    return { url: m3u8Url, content: m3u8Content };
+    return m3u8Content;
   } catch (e) {
     console.error('Puppeteer error:', e.message);
     return null;
   } finally {
     if (browser) await browser.close();
+  }
+}
+
+function rewriteM3u8(content) {
+  // Rewrite .jpg extension to .ts
+  let out = content.replace(/\.jpg(?=\?)/g, '.ts');
+  // Rewrite segment URLs to go through our proxy
+  out = out.replace(/^(https:\/\/r2-[^\s]+)$/gm, (match) => {
+    return `${HOST}/seg?url=${encodeURIComponent(match)}`;
+  });
+  return out;
+}
+
+// Segment proxy — pipes CDN bytes through our server
+app.get('/seg', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).send('Missing url');
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://pooembed.eu/'
+      }
+    });
+    res.setHeader('Content-Type', 'video/mp2t');
+    r.body.pipe(res);
+  } catch(e) {
+    console.error('Segment proxy error:', e.message);
+    res.status(500).send('Error');
+  }
+});
+
+// Background refresh — runs independently, no queue
+async function startRefreshing(cacheKey, iframeUrl) {
+  while (m3u8Cache[cacheKey] !== undefined) {
+    await new Promise(r => setTimeout(r, 20000));
+    if (m3u8Cache[cacheKey] === undefined) break;
+    try {
+      const content = await _extractM3u8(iframeUrl);
+      if (content) {
+        m3u8Cache[cacheKey] = rewriteM3u8(content);
+        console.log(`Refreshed: ${cacheKey}`);
+      }
+    } catch (e) {
+      console.error('Refresh error:', e.message);
+    }
   }
 }
 
@@ -340,28 +307,25 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       const iframeUrl = source.iframe;
       if (!iframeUrl) continue;
       console.log(`Extracting: ${iframeUrl}`);
-      const result = await extractM3u8FromEmbed(iframeUrl);
-      if (!result || !result.content) { console.log('No m3u8 content'); continue; }
-      console.log(`Found: ${result.url}`);
+      const content = await extractM3u8FromEmbed(iframeUrl);
+      if (!content) { console.log('No content'); continue; }
 
       const cacheKey = `${streamId}_${source.id || 0}`;
-      m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, '.ts');
+      m3u8Cache[cacheKey] = rewriteM3u8(content);
       m3u8IframeMap[cacheKey] = iframeUrl;
 
-      // Auto-expire after 4 hours
       setTimeout(() => {
         delete m3u8Cache[cacheKey];
         delete m3u8IframeMap[cacheKey];
       }, 4 * 60 * 60 * 1000);
 
-      // Start background refresh
       startRefreshing(cacheKey, iframeUrl);
 
-      const proxyUrl = `${HOST}/cached-m3u8/${cacheKey}`;
+      console.log(`Found stream for ${cacheKey}`);
       results.push({
         name: source.tag || source.name || 'Stream',
         title: source.name || stream.name,
-        url: proxyUrl
+        url: `${HOST}/cached-m3u8/${cacheKey}`
       });
     }
 
@@ -373,6 +337,5 @@ app.get('/stream/tv/:id.json', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n✅ PPV.to Stremio Addon running!`);
-  console.log(`   ${HOST}/manifest.json\n`);
+  console.log(`\n✅ PPV.to Addon: ${HOST}/manifest.json\n`);
 });
