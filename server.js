@@ -74,9 +74,25 @@ async function fetchStreams() {
 
 function flattenStreams(categories) {
   const all = [];
+  const now = Math.floor(Date.now() / 1000);
+  const eightHoursFromNow = now + (8 * 60 * 60);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const todayTimestamp = Math.floor(startOfToday.getTime() / 1000);
+
   for (const cat of categories) {
+    if (!SUPPORTED_CATEGORIES.includes(cat.category)) continue;
     for (const stream of cat.streams || []) {
-      all.push({ ...stream, category_name: cat.category });
+      if (stream.always_live) {
+        all.push({ ...stream, category_name: cat.category });
+        continue;
+      }
+      const isLive = stream.starts_at <= now && stream.ends_at >= now;
+      const startsWithin8Hours = stream.starts_at <= eightHoursFromNow && stream.starts_at >= now;
+      const startedToday = stream.starts_at >= todayTimestamp;
+      if (isLive || startsWithin8Hours || startedToday) {
+        all.push({ ...stream, category_name: cat.category });
+      }
     }
   }
   return all;
@@ -85,7 +101,6 @@ function flattenStreams(categories) {
 function colorBackground(colors) {
   const c1 = (colors && colors[0]) ? colors[0] : '#1a1a2e';
   const c2 = (colors && colors[1]) ? colors[1] : '#16213e';
-  // Return a URL to our gradient endpoint
   return `${HOST}/bg?c1=${encodeURIComponent(c1)}&c2=${encodeURIComponent(c2)}`;
 }
 
@@ -139,43 +154,28 @@ app.get('/meta/tv/:id.json', async (req, res) => {
   }
 });
 
-// In-memory cache for m3u8 content and live stream URLs
-const m3u8Cache = {};
-const liveStreams = {}; // stores { monoUrl, lastContent, lastFetch }
-
-// Fetch fresh mono.ts.m3u8 content directly (no auth needed for segments)
-async function fetchFreshPlaylist(monoUrl) {
-  try {
-    const res = await fetch(monoUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://pooembed.eu/',
-        'Origin': 'https://pooembed.eu'
-      }
-    });
-    if (!res.ok) return null;
-    const text = await res.text();
-    return text.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
-  } catch(e) {
-    console.error('Fresh playlist fetch error:', e.message);
-    return null;
-  }
-}
-
-// Serve live m3u8 — refreshes from CDN each time
-app.get('/live-m3u8/:key', async (req, res) => {
-  const stream = liveStreams[req.params.key];
-  if (!stream) return res.status(404).send('Stream not found or expired');
-  
-  // Fetch fresh content directly from CDN
-  const fresh = await fetchFreshPlaylist(stream.monoUrl);
-  if (!fresh) return res.status(503).send('Could not fetch playlist');
-  
-  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-  res.send(fresh);
+// Gradient background endpoint
+app.get('/bg', (req, res) => {
+  const c1 = req.query.c1 || '#1a1a2e';
+  const c2 = req.query.c2 || '#16213e';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
+    <defs>
+      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:${c1};stop-opacity:1" />
+        <stop offset="100%" style="stop-color:${c2};stop-opacity:1" />
+      </linearGradient>
+    </defs>
+    <rect width="1920" height="1080" fill="url(#g)"/>
+  </svg>`;
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.send(svg);
 });
 
-// Serve cached m3u8 content (fallback)
+// In-memory cache
+const m3u8Cache = {};
+const m3u8IframeMap = {};
+
+// Serve cached m3u8
 app.get('/cached-m3u8/:key', (req, res) => {
   const cached = m3u8Cache[req.params.key];
   if (!cached) return res.status(404).send('Expired or not found');
@@ -183,7 +183,7 @@ app.get('/cached-m3u8/:key', (req, res) => {
   res.send(cached);
 });
 
-// Debug endpoint to view cached m3u8 content
+// Debug endpoint
 app.get('/debug-cache', (req, res) => {
   const keys = Object.keys(m3u8Cache);
   if (keys.length === 0) return res.send('Cache empty');
@@ -191,6 +191,23 @@ app.get('/debug-cache', (req, res) => {
   res.setHeader('Content-Type', 'text/plain');
   res.send(m3u8Cache[latest]);
 });
+
+// Background refresh every 5 seconds
+async function startRefreshing(cacheKey, iframeUrl) {
+  while (m3u8Cache[cacheKey] !== undefined) {
+    await new Promise(r => setTimeout(r, 5000));
+    if (m3u8Cache[cacheKey] === undefined) break;
+    try {
+      console.log(`Refreshing: ${cacheKey}`);
+      const result = await extractM3u8FromEmbed(iframeUrl);
+      if (result && result.content) {
+        m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
+      }
+    } catch (e) {
+      console.error('Refresh error:', e.message);
+    }
+  }
+}
 
 // Queue to prevent multiple Puppeteer instances running simultaneously
 let puppeteerQueue = Promise.resolve();
@@ -206,12 +223,7 @@ async function _extractM3u8(iframeUrl) {
     browser = await puppeteer.launch({
       headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ]
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
     });
 
     const page = await browser.newPage();
@@ -234,13 +246,12 @@ async function _extractM3u8(iframeUrl) {
 
     page.on('response', async response => {
       const url = response.url();
-      // Intercept the mono.ts.m3u8 response and grab its content
       if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
         try {
           const text = await response.text();
           m3u8Content = text;
           console.log('Captured mono.ts.m3u8 content, length:', text.length);
-        } catch(e) {
+        } catch (e) {
           console.log('Could not read mono.ts.m3u8:', e.message);
         }
       }
@@ -255,11 +266,10 @@ async function _extractM3u8(iframeUrl) {
     await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-      Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
     });
+
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
-    // Wait for mono.ts.m3u8 content
     if (!m3u8Content) {
       await new Promise(resolve => {
         const interval = setInterval(() => {
@@ -278,63 +288,6 @@ async function _extractM3u8(iframeUrl) {
   }
 }
 
-// Gradient background image endpoint
-app.get('/bg', (req, res) => {
-  const c1 = req.query.c1 || '#1a1a2e';
-  const c2 = req.query.c2 || '#16213e';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
-    <defs>
-      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" style="stop-color:${c1};stop-opacity:1" />
-        <stop offset="100%" style="stop-color:${c2};stop-opacity:1" />
-      </linearGradient>
-    </defs>
-    <rect width="1920" height="1080" fill="url(#g)"/>
-  </svg>`;
-  res.setHeader('Content-Type', 'image/svg+xml');
-  res.send(svg);
-});
-
-app.get('/proxy/m3u8', async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).send('Missing url');
-  try {
-    const m3u8Res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://pooembed.eu/',
-        'Origin': 'https://pooembed.eu',
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9'
-      }
-    });
-    console.log('Proxy fetch status:', m3u8Res.status, url);
-    let content = await m3u8Res.text();
-
-    const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
-
-    // Rewrite relative .m3u8 sub-playlists through our proxy (so we can rewrite .jpg segments)
-    content = content.replace(/^(?!#)(?!https?:\/\/)([^\s]+\.m3u8[^\s]*)$/gm, (match) => {
-      const absUrl = baseUrl + match;
-      return `${HOST}/proxy/m3u8?url=${encodeURIComponent(absUrl)}`;
-    });
-
-    // Rewrite relative segment URLs to absolute (serve directly from CDN)
-    content = content.replace(/^(?!#)(?!https?:\/\/)([^\s]+)$/gm, (match) => {
-      return baseUrl + match;
-    });
-
-    // Rewrite .jpg? to .ts? so players accept the segments
-    content = content.replace(/\.jpg\?/g, '.ts?');
-
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-    res.send(content);
-  } catch (e) {
-    console.error('Proxy error:', e);
-    res.status(500).send('Proxy error');
-  }
-});
-
 app.get('/stream/tv/:id.json', async (req, res) => {
   try {
     const streamId = req.params.id.replace('ppvto:', '');
@@ -351,19 +304,19 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       if (!iframeUrl) continue;
       console.log(`Extracting: ${iframeUrl}`);
       const result = await extractM3u8FromEmbed(iframeUrl);
-      if (!result) { console.log('No m3u8 found'); continue; }
       if (!result || !result.content) { console.log('No m3u8 content'); continue; }
       console.log(`Found: ${result.url}`);
 
-      // Cache the m3u8 content and serve it via a static endpoint
-      const cacheKey = `${streamId}_${Date.now()}`;
+      const cacheKey = `${streamId}_${source.id || 0}_${Date.now()}`;
       m3u8Cache[cacheKey] = result.content.replace(/\.jpg\?/g, '.ts?').replace(/\.ts\?\?/g, '.ts?');
       m3u8IframeMap[cacheKey] = iframeUrl;
-      // Auto-expire cache after 4 hours (stream duration)
+
+      // Auto-expire after 4 hours
       setTimeout(() => {
         delete m3u8Cache[cacheKey];
         delete m3u8IframeMap[cacheKey];
       }, 4 * 60 * 60 * 1000);
+
       // Start background refresh
       startRefreshing(cacheKey, iframeUrl);
 
