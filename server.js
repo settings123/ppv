@@ -236,20 +236,54 @@ async function _extractM3u8(iframeUrl) {
   }
 }
 
-// Background refresh — runs independently every 20s
+// Background refresh — keeps browser open, listens for new mono.ts.m3u8 responses
 async function startRefreshing(cacheKey, iframeUrl) {
-  while (m3u8Cache[cacheKey] !== undefined) {
-    await new Promise(r => setTimeout(r, 20000));
-    if (m3u8Cache[cacheKey] === undefined) break;
-    try {
-      const content = await _extractM3u8(iframeUrl);
-      if (content) {
-        m3u8Cache[cacheKey] = content;
-        console.log(`Refreshed: ${cacheKey}`);
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    });
+    const page = await browser.newPage();
+
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      const rt = req.resourceType();
+      if (['image', 'font', 'stylesheet'].includes(rt)) req.abort();
+      else req.continue();
+    });
+
+    // Every new mono.ts.m3u8 response updates the cache
+    page.on('response', async response => {
+      const url = response.url();
+      if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
+        try {
+          const text = await response.text();
+          if (text && m3u8Cache[cacheKey] !== undefined) {
+            m3u8Cache[cacheKey] = text;
+            console.log(`Refreshed: ${cacheKey} len:${text.length}`);
+          }
+        } catch(e) {}
       }
-    } catch (e) {
-      console.error('Refresh error:', e.message);
+    });
+
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    });
+
+    await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // Keep browser alive while cache key exists
+    while (m3u8Cache[cacheKey] !== undefined) {
+      await new Promise(r => setTimeout(r, 5000));
     }
+  } catch(e) {
+    console.error('Refresh browser error:', e.message);
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
@@ -275,9 +309,15 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       m3u8Cache[cacheKey] = content;
 
       setTimeout(() => delete m3u8Cache[cacheKey], 4 * 60 * 60 * 1000);
-      startRefreshing(cacheKey, iframeUrl);
+
+      // Start refreshing immediately — don't wait, run in background
+      setImmediate(() => startRefreshing(cacheKey, iframeUrl));
 
       console.log(`Found stream for ${cacheKey}`);
+
+      // Wait a few seconds for first refresh to complete before returning URL
+      await new Promise(r => setTimeout(r, 3000));
+
       results.push({
         name: source.tag || source.name || 'Stream',
         title: source.name || stream.name,
