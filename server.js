@@ -123,7 +123,7 @@ function streamToMeta(stream) {
     logo: stream.poster || '',
     description: `${stream.tag} — ${stream.category_name}`,
     genres: [stream.category_name],
-    releaseInfo: isLive ? 'LIVE' : isUpcoming ? new Date(stream.starts_at * 1000).toLocaleString() : 'Ended'
+    releaseInfo: isLive ? 'LIVE' : isUpcoming ? new Date(stream.starts_at * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' }) : 'Ended'
   };
 }
 
