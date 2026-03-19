@@ -171,6 +171,26 @@ app.get('/bg', (req, res) => {
   res.send(svg);
 });
 
+// Sub-playlist proxy - fetches mono.ts.m3u8 and rewrites .jpg to .ts
+app.get('/cached-sub/:url', async (req, res) => {
+  const url = decodeURIComponent(req.params.url);
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://pooembed.eu/',
+        'Origin': 'https://pooembed.eu'
+      }
+    });
+    let text = await r.text();
+    text = text.replace(/\.jpg(\?)/g, '.ts$1');
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.send(text);
+  } catch(e) {
+    res.status(500).send('Error');
+  }
+});
+
 // In-memory cache
 const m3u8Cache = {};
 const m3u8IframeMap = {};
@@ -192,20 +212,62 @@ app.get('/debug-cache', (req, res) => {
   res.send(m3u8Cache[latest]);
 });
 
-// Background refresh every 5 seconds
+// Background refresh — keeps browser open and refreshes page repeatedly
 async function startRefreshing(cacheKey, iframeUrl) {
-  while (m3u8Cache[cacheKey] !== undefined) {
-    await new Promise(r => setTimeout(r, 5000));
-    if (m3u8Cache[cacheKey] === undefined) break;
-    try {
-      console.log(`Refreshing: ${cacheKey}`);
-      const result = await extractM3u8FromEmbed(iframeUrl);
-      if (result && result.content) {
-        m3u8Cache[cacheKey] = result.content;
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    });
+
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      const resourceType = request.resourceType();
+      if (['image', 'font', 'stylesheet'].includes(resourceType)) {
+        request.abort();
+      } else {
+        request.continue();
       }
-    } catch (e) {
-      console.error('Refresh error:', e.message);
+    });
+
+    while (m3u8Cache[cacheKey] !== undefined) {
+      await new Promise(r => setTimeout(r, 4000));
+      if (m3u8Cache[cacheKey] === undefined) break;
+      try {
+        let newContent = null;
+        const responseHandler = async (response) => {
+          const url = response.url();
+          if (url.includes('modifiles') && url.includes('index.m3u8')) {
+            try {
+              const text = await response.text();
+              newContent = text;
+            } catch(e) {}
+          }
+        };
+        page.on('response', responseHandler);
+        await page.reload({ waitUntil: 'networkidle2', timeout: 15000 });
+        page.off('response', responseHandler);
+        if (newContent) {
+          m3u8Cache[cacheKey] = newContent.replace(/\.jpg(\?)/g, '.ts$1');
+          console.log(`Refreshed cache: ${cacheKey}`);
+        }
+      } catch (e) {
+        console.error('Refresh error:', e.message);
+      }
     }
+  } catch(e) {
+    console.error('Refresh browser error:', e.message);
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
@@ -246,13 +308,14 @@ async function _extractM3u8(iframeUrl) {
 
     page.on('response', async response => {
       const url = response.url();
-      if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
+      if (url.includes('modifiles') && url.includes('index.m3u8')) {
         try {
           const text = await response.text();
+          // index.m3u8 is the master playlist - contains video+audio tracks
           m3u8Content = text;
-          console.log('Captured mono.ts.m3u8 content, length:', text.length);
+          console.log('Captured index.m3u8 content, length:', text.length);
         } catch (e) {
-          console.log('Could not read mono.ts.m3u8:', e.message);
+          console.log('Could not read index.m3u8:', e.message);
         }
       }
     });
@@ -308,7 +371,15 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       console.log(`Found: ${result.url}`);
 
       const cacheKey = `${streamId}_${source.id || 0}_${Date.now()}`;
-      m3u8Cache[cacheKey] = result.content;
+      // Rewrite relative sub-playlist URLs to absolute via our proxy
+const baseUrl = result.url ? result.url.substring(0, result.url.lastIndexOf('/') + 1) : '';
+let m3u8Content = result.content;
+if (baseUrl) {
+  m3u8Content = m3u8Content.replace(/^(?!#)(?!https?:\/\/)([^\s]+\.m3u8[^\s]*)$/gm, (match) => {
+    return `${HOST}/cached-sub/${encodeURIComponent(baseUrl + match)}`;
+  });
+}
+m3u8Cache[cacheKey] = m3u8Content;
       m3u8IframeMap[cacheKey] = iframeUrl;
 
       // Auto-expire after 4 hours
