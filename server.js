@@ -224,19 +224,19 @@ async function _extractM3u8(iframeUrl) {
       Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
     });
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    console.log('Page loaded, trying to play...');
+    console.log('Page loaded, waiting 3s then playing...');
+    await new Promise(r => setTimeout(r, 3000));
 
-    // Try clicking play button for embeds that require user interaction
+    // Click the center display icon (big play button)
+    try { await page.click('.jw-display-icon-display'); console.log('clicked display icon'); } catch(e) {}
+    try { await page.click('.jw-icon-display'); console.log('clicked jw-icon-display'); } catch(e) {}
     try {
       await page.evaluate(() => {
         const v = document.querySelector('video');
-        if (v) { v.muted = true; v.play(); console.log('video.play() called'); }
-        else { console.log('no video element found'); }
+        if (v) { v.muted = true; v.play(); console.log('video.play() called, src:', v.src); }
+        else console.log('no video element');
       });
     } catch(e) { console.log('evaluate error:', e.message); }
-    try { await page.click('.jw-icon-playback'); console.log('clicked jw-icon-playback'); } catch(e) {}
-    try { await page.click('.jw-display-click'); console.log('clicked jw-display-click'); } catch(e) {}
-    try { await page.click('video'); console.log('clicked video'); } catch(e) {}
 
     if (!m3u8Content) {
       console.log('Waiting for m3u8...');
