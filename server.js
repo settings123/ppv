@@ -291,8 +291,9 @@ app.get('/stream/tv/:id.json', async (req, res) => {
 
       const cacheKey = `${streamId}_${source.id || 0}`;
       m3u8Cache[cacheKey] = result.content;
+      m3u8Cache[cacheKey + '_iframe'] = iframeUrl;
 
-      setTimeout(() => delete m3u8Cache[cacheKey], 4 * 60 * 60 * 1000);
+      setTimeout(() => { delete m3u8Cache[cacheKey]; delete m3u8Cache[cacheKey + '_iframe']; }, 4 * 60 * 60 * 1000);
 
       // Start direct polling refresh using the monoTsUrl
       if (result.monoTsUrl) {
