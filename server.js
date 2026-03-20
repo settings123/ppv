@@ -225,6 +225,17 @@ async function _extractM3u8(iframeUrl) {
     });
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
+    // Try clicking play button for embeds that require user interaction
+    try {
+      await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v) { v.muted = true; v.play(); }
+      });
+    } catch(e) {}
+    try { await page.click('.jw-icon-playback'); } catch(e) {}
+    try { await page.click('.jw-display-click'); } catch(e) {}
+    try { await page.click('video'); } catch(e) {}
+
     if (!m3u8Content) {
       await new Promise(resolve => {
         const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
@@ -285,10 +296,15 @@ async function startRefreshing(cacheKey, iframeUrl) {
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
     // Force video to play so JWPlayer keeps fetching segments
-    await page.evaluate(() => {
-      const v = document.querySelector('video');
-      if (v) { v.muted = true; v.play(); }
-    });
+    try {
+      await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v) { v.muted = true; v.play(); }
+      });
+    } catch(e) {}
+    try { await page.click('.jw-icon-playback'); } catch(e) {}
+    try { await page.click('.jw-display-click'); } catch(e) {}
+    try { await page.click('video'); } catch(e) {}
 
     // Keep alive and re-trigger play every 10s
     while (m3u8Cache[cacheKey] !== undefined) {
