@@ -297,7 +297,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
 
       // Start direct polling refresh using the monoTsUrl
       if (result.monoTsUrl) {
-        setImmediate(() => startDirectPolling(cacheKey, result.monoTsUrl));
+        setImmediate(() => startDirectRefreshing(cacheKey, result.monoTsUrl));
       } else {
         setImmediate(() => startRefreshing(cacheKey, iframeUrl));
       }
