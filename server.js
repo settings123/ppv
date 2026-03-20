@@ -268,7 +268,7 @@ async function startRefreshing(cacheKey, iframeUrl) {
         try {
           const text = await response.text();
           if (text && text.includes('#EXTM3U') && m3u8Cache[cacheKey] !== undefined) {
-            m3u8Cache[cacheKey] = text;
+            m3u8Cache[cacheKey] = text.replace(/\.jpg(?=\?)/g, ".ts");
             const seq = text.match(/SEQUENCE:(\d+)/)?.[1];
             console.log(`Refreshed: ${cacheKey} seq:${seq}`);
           }
@@ -326,7 +326,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       if (!result || !result.content) { console.log('No content'); continue; }
 
       const cacheKey = `${streamId}_${source.id || 0}`;
-      m3u8Cache[cacheKey] = result.content;
+      m3u8Cache[cacheKey] = result.content.replace(/\.jpg(?=\?)/g, ".ts");
       m3u8Cache[cacheKey + '_iframe'] = iframeUrl;
 
       setTimeout(() => { delete m3u8Cache[cacheKey]; delete m3u8Cache[cacheKey + '_iframe']; }, 4 * 60 * 60 * 1000);
