@@ -224,24 +224,28 @@ async function _extractM3u8(iframeUrl) {
       Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
     });
     await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    console.log('Page loaded, trying to play...');
 
     // Try clicking play button for embeds that require user interaction
     try {
       await page.evaluate(() => {
         const v = document.querySelector('video');
-        if (v) { v.muted = true; v.play(); }
+        if (v) { v.muted = true; v.play(); console.log('video.play() called'); }
+        else { console.log('no video element found'); }
       });
-    } catch(e) {}
-    try { await page.click('.jw-icon-playback'); } catch(e) {}
-    try { await page.click('.jw-display-click'); } catch(e) {}
-    try { await page.click('video'); } catch(e) {}
+    } catch(e) { console.log('evaluate error:', e.message); }
+    try { await page.click('.jw-icon-playback'); console.log('clicked jw-icon-playback'); } catch(e) {}
+    try { await page.click('.jw-display-click'); console.log('clicked jw-display-click'); } catch(e) {}
+    try { await page.click('video'); console.log('clicked video'); } catch(e) {}
 
     if (!m3u8Content) {
+      console.log('Waiting for m3u8...');
       await new Promise(resolve => {
         const iv = setInterval(() => { if (m3u8Content) { clearInterval(iv); resolve(); } }, 500);
         setTimeout(() => { clearInterval(iv); resolve(); }, 15000);
       });
     }
+    console.log('m3u8Content:', m3u8Content ? m3u8Content.length : 'null');
 
     // Return both content and URL so refresh can poll directly
     return { content: m3u8Content, monoTsUrl };
@@ -331,7 +335,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
     const stream = streams.find(s => String(s.id) === streamId);
     if (!stream) return res.json({ streams: [] });
 
-    const sources = [stream, ...(stream.substreams || [])];
+    const sources = [stream]; // Only use main source to avoid queue overload
     const results = [];
 
     for (const source of sources) {
