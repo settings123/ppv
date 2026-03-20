@@ -244,30 +244,66 @@ async function _extractM3u8(iframeUrl) {
 
 // Background refresh — directly polls mono.ts.m3u8 URL using the token
 // The token from modifiles is valid for the duration of the stream
-async function startRefreshing(cacheKey, monoUrl) {
-  console.log(`Starting refresh loop for ${cacheKey} using ${monoUrl}`);
-  while (m3u8Cache[cacheKey] !== undefined) {
-    try {
-      const r = await fetch(monoUrl, {
-        headers: {
-          'Referer': 'https://pooembed.eu/',
-          'Origin': 'https://pooembed.eu',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
-      if (r.ok) {
-        const text = await r.text();
-        if (text && text.includes('#EXTM3U')) {
-          m3u8Cache[cacheKey] = text;
-          console.log(`Refreshed: ${cacheKey} seq:${text.match(/SEQUENCE:(\d+)/)?.[1]}`);
-        }
-      } else {
-        console.log(`Refresh got ${r.status} for ${cacheKey}`);
+async function startRefreshing(cacheKey, iframeUrl) {
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+             '--autoplay-policy=no-user-gesture-required']
+    });
+    const page = await browser.newPage();
+
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      const rt = req.resourceType();
+      if (['image', 'font', 'stylesheet'].includes(rt)) req.abort();
+      else req.continue();
+    });
+
+    page.on('response', async response => {
+      const url = response.url();
+      if (url.includes('modifiles') && url.includes('mono.ts.m3u8')) {
+        try {
+          const text = await response.text();
+          if (text && text.includes('#EXTM3U') && m3u8Cache[cacheKey] !== undefined) {
+            m3u8Cache[cacheKey] = text;
+            const seq = text.match(/SEQUENCE:(\d+)/)?.[1];
+            console.log(`Refreshed: ${cacheKey} seq:${seq}`);
+          }
+        } catch(e) {}
       }
-    } catch(e) {
-      console.error('Refresh error:', e.message);
+    });
+
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setExtraHTTPHeaders({ 'Referer': 'https://ppv.to/' });
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    });
+
+    await page.goto(iframeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // Force video to play so JWPlayer keeps fetching segments
+    await page.evaluate(() => {
+      const v = document.querySelector('video');
+      if (v) { v.muted = true; v.play(); }
+    });
+
+    // Keep alive and re-trigger play every 10s
+    while (m3u8Cache[cacheKey] !== undefined) {
+      await new Promise(r => setTimeout(r, 10000));
+      try {
+        await page.evaluate(() => {
+          const v = document.querySelector('video');
+          if (v && v.paused) { v.muted = true; v.play(); }
+        });
+      } catch(e) {}
     }
-    await new Promise(r => setTimeout(r, 3000));
+  } catch(e) {
+    console.error('Refresh browser error:', e.message);
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
@@ -296,11 +332,7 @@ app.get('/stream/tv/:id.json', async (req, res) => {
       setTimeout(() => { delete m3u8Cache[cacheKey]; delete m3u8Cache[cacheKey + '_iframe']; }, 4 * 60 * 60 * 1000);
 
       // Start direct polling refresh using the monoTsUrl
-      if (result.monoTsUrl) {
-        setImmediate(() => startRefreshing(cacheKey, result.monoTsUrl));
-      } else {
-        setImmediate(() => startRefreshing(cacheKey, iframeUrl));
-      }
+      setImmediate(() => startRefreshing(cacheKey, iframeUrl));
 
       console.log(`Found stream for ${cacheKey}`);
       results.push({
